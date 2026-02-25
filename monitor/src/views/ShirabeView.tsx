@@ -6,21 +6,8 @@ interface ShirabeViewProps {
   onNavigate: (view: ViewType) => void;
 }
 
-// Static thesis data from references (loaded once)
-const THESIS_DATA: ShirabeThesisStatus[] = [
-  { student: '五藤篤司', category: 'M', phase: '報告書提出', nextMilestone: '報告書〆切 ~2/19', daysLeft: null },
-  { student: '河田龍斉', category: 'M', phase: '報告書承認済(2/16)', nextMilestone: '-', daysLeft: null },
-  { student: '吉峯幹弥', category: 'M', phase: '報告書提出', nextMilestone: '報告書〆切 ~2/19', daysLeft: null },
-  { student: '岡崎翔太', category: 'M', phase: '報告書提出', nextMilestone: '報告書〆切 ~2/19', daysLeft: null },
-  { student: '山田夏鈴', category: 'M', phase: '報告書提出', nextMilestone: '報告書〆切 ~2/19', daysLeft: null },
-  { student: '浅田晴菜', category: 'M', phase: '報告書提出', nextMilestone: '報告書〆切 ~2/19', daysLeft: null },
-  { student: '西田啓人', category: 'D', phase: '公聴会済(1/20)', nextMilestone: '報告書提出', daysLeft: null },
-  { student: 'ITOTE Francis', category: 'D', phase: '公聴会済(1/20)', nextMilestone: '報告書提出', daysLeft: null },
-  { student: 'Sunjoh Chris', category: 'D', phase: '完了（9月修了済）', nextMilestone: '-', daysLeft: null },
-  { student: '田島遥人', category: 'B', phase: '卒論発表済', nextMilestone: '卒論提出 & 判定', daysLeft: null },
-  { student: '堀井孝晃', category: 'B', phase: '卒論発表済', nextMilestone: '卒論提出 & 判定', daysLeft: null },
-  { student: '渡辺悠斗', category: 'B', phase: '卒論発表済', nextMilestone: '卒論提出 & 判定', daysLeft: null },
-];
+// Thesis data placeholder (populate from external config or API)
+const THESIS_DATA: ShirabeThesisStatus[] = [];
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
