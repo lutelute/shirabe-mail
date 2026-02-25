@@ -800,7 +800,8 @@ Markdown形式で以下のセクションを含める:
       }
 
       const outputFormat = options.streamJson ? 'stream-json' : 'json';
-      const args = ['-p', '-', '--output-format', outputFormat, ...(options.args || [])];
+      const verboseFlag = options.streamJson ? ['--verbose'] : [];
+      const args = ['-p', '-', '--output-format', outputFormat, ...verboseFlag, ...(options.args || [])];
 
       const cleanEnv = cleanEnvForClaude();
       const proc = spawn(CLAUDE_CLI_PATH, args, {
