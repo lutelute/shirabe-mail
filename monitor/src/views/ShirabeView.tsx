@@ -30,11 +30,18 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
     try {
       const api = window.electronAPI;
 
-      // Parallel fetch: unread mails, calendar events, tasks
-      const [accounts, tasks] = await Promise.all([
-        api.getAccounts(),
-        api.getTasks('' /* all accounts */),
-      ]);
+      const accounts = await api.getAccounts();
+
+      // Get tasks for all accounts
+      let tasks: Awaited<ReturnType<typeof api.getTasks>> = [];
+      for (const acc of accounts) {
+        try {
+          const accTasks = await api.getTasks(acc.email);
+          tasks = tasks.concat(accTasks);
+        } catch {
+          // skip accounts without tasks
+        }
+      }
 
       // Get events for the next 7 days
       let events: Awaited<ReturnType<typeof api.getEvents>> = [];

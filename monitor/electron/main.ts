@@ -1329,7 +1329,11 @@ Markdown形式で以下のセクションを含める:
         { headers },
       );
       if (!response.ok) {
-        return { hasUpdate: false, error: `GitHub API: ${response.status}${!ghToken ? ' (gh auth未設定)' : ''}` };
+        // Private repo without gh auth → silently skip
+        if (response.status === 404 && !ghToken) {
+          return { hasUpdate: false };
+        }
+        return { hasUpdate: false, error: `GitHub API: ${response.status}` };
       }
       const release = await response.json() as {
         tag_name: string;
