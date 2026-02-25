@@ -19,6 +19,8 @@ import { loadProjectContext } from './tools/load-project-context.js';
 import { scanHistoricalEmails } from './tools/scan-historical-emails.js';
 import { moveToTrash } from './tools/move-to-trash.js';
 import { copyMailToFolder } from './tools/copy-mail-to-folder.js';
+import { getSentMails } from './tools/get-sent-mails.js';
+import { getDeadlineItems } from './tools/get-deadline-items.js';
 
 const server = new McpServer({
   name: 'shirabe',
@@ -323,6 +325,50 @@ server.tool(
       mail_ids: params.mail_ids,
       account: params.account,
       target_folder_id: params.target_folder_id,
+    });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+// --- get_sent_mails ---
+server.tool(
+  'get_sent_mails',
+  'Get sent emails from Sent folders. Useful for annual pattern analysis and checking what you have sent.',
+  {
+    days_back: z.number().int().min(1).max(365).default(30).describe('How many days back to search'),
+    account: z.string().optional().describe('Email address to filter by. Omit for all accounts.'),
+    limit: z.number().int().min(1).max(500).default(50).describe('Maximum number of mails to return'),
+    keyword: z.string().optional().describe('Optional keyword to filter by subject and preview'),
+  },
+  async (params) => {
+    const result = getSentMails({
+      days_back: params.days_back,
+      account: params.account,
+      limit: params.limit,
+      keyword: params.keyword,
+    });
+    return {
+      content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+    };
+  },
+);
+
+// --- get_deadline_items ---
+server.tool(
+  'get_deadline_items',
+  'Extract deadline items from calendar events, tasks with due dates, and email subjects containing deadline keywords (締切, 〆切, 期限, deadline, due, until, まで). Returns a unified date-sorted list with source labels (calendar/task/mail) and urgency classification (overdue/today/this_week/upcoming).',
+  {
+    days_forward: z.number().int().min(1).max(90).default(14).describe('How many days forward to look for deadlines'),
+    account: z.string().optional().describe('Email address to filter by. Omit for all accounts.'),
+    include_mail_deadlines: z.boolean().default(true).describe('Include deadline-keyword matches from email subjects (past 7 days)'),
+  },
+  async (params) => {
+    const result = getDeadlineItems({
+      days_forward: params.days_forward,
+      account: params.account,
+      include_mail_deadlines: params.include_mail_deadlines,
     });
     return {
       content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],

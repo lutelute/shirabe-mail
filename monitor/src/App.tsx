@@ -16,10 +16,11 @@ import ProposalView from './views/ProposalView';
 import ChatView from './views/ChatView';
 import JunkView from './views/JunkView';
 import SettingsView from './views/SettingsView';
+import ShirabeView from './views/ShirabeView';
 import SetupWizard from './components/SetupWizard';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<ViewType>('mail');
+  const [activeView, setActiveView] = useState<ViewType>('shirabe');
   const { settings, isFirstRun } = useAppContext();
   const [showWizard, setShowWizard] = useState(false);
 
@@ -50,6 +51,8 @@ export default function App() {
 
   const renderContent = () => {
     switch (activeView) {
+      case 'shirabe':
+        return <ShirabeView onNavigate={setActiveView} />;
       case 'mail':
         return <MailView onNavigate={setActiveView} />;
       case 'calendar':
