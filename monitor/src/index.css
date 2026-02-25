@@ -1,0 +1,181 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* === Theme: Dark (default) === */
+:root {
+  --surface-50:  #f4f5f7;
+  --surface-100: #e4e6eb;
+  --surface-200: #c9cdd6;
+  --surface-300: #a1a8b8;
+  --surface-400: #737d92;
+  --surface-500: #555e72;
+  --surface-600: #3d4556;
+  --surface-700: #2c3242;
+  --surface-800: #1e2230;
+  --surface-900: #14171f;
+  --surface-950: #0d0f14;
+  --accent-50:  #eff6ff;
+  --accent-100: #dbeafe;
+  --accent-200: #bfdbfe;
+  --accent-300: #93c5fd;
+  --accent-400: #60a5fa;
+  --accent-500: #3b82f6;
+  --accent-600: #2563eb;
+  --accent-700: #1d4ed8;
+  --scrollbar-thumb: #3d4556;
+  --scrollbar-thumb-hover: #555e72;
+  color-scheme: dark;
+}
+
+/* === Theme: Paper === */
+.theme-paper {
+  --surface-50:  #1e1a16;
+  --surface-100: #302b24;
+  --surface-200: #4d4840;
+  --surface-300: #736d62;
+  --surface-400: #948d82;
+  --surface-500: #aba49a;
+  --surface-600: #d4d2cc;
+  --surface-700: #e0ded8;
+  --surface-800: #eae8e3;
+  --surface-900: #f2f0eb;
+  --surface-950: #faf8f5;
+  --accent-50:  #1d3461;
+  --accent-100: #1d4e8a;
+  --accent-200: #2563a8;
+  --accent-300: #2d74b8;
+  --accent-400: #2b6cb0;
+  --accent-500: #2563a0;
+  --accent-600: #dbeafe;
+  --accent-700: #eff6ff;
+  --scrollbar-thumb: #d4d2cc;
+  --scrollbar-thumb-hover: #bab8b2;
+  color-scheme: light;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Selection */
+::selection {
+  background: rgba(59, 130, 246, 0.3);
+}
+
+/* Paper theme overrides */
+.theme-paper {
+  color: #302b24;
+}
+
+/* Override hardcoded text-white in paper theme */
+.theme-paper .text-white {
+  color: #1e1a16 !important;
+}
+
+/* Override bg-white elements to be slightly warmer */
+.theme-paper .bg-white {
+  background-color: #fdfcfa !important;
+}
+
+/* Fix blue/accent buttons in paper theme */
+.theme-paper .bg-blue-500,
+.theme-paper .bg-blue-600 {
+  color: #fff !important;
+}
+.theme-paper .bg-blue-500 .text-white,
+.theme-paper .bg-blue-600 .text-white,
+.theme-paper .bg-blue-500.text-white,
+.theme-paper .bg-blue-600.text-white,
+.theme-paper .bg-red-500 .text-white,
+.theme-paper .bg-red-500.text-white {
+  color: #fff !important;
+}
+
+/* Badge text stays white on colored backgrounds */
+.theme-paper .bg-blue-500.text-white,
+.theme-paper .bg-accent-500.text-white,
+.theme-paper .rounded-full.bg-blue-500 {
+  color: #fff !important;
+}
+
+.theme-paper ::selection {
+  background: rgba(37, 99, 160, 0.2);
+}
+
+/* Checkbox appearance in paper theme */
+.theme-paper input[type="checkbox"] {
+  border-color: #bab8b2;
+  background-color: #faf8f5;
+}
+
+/* Paper theme shadow for depth */
+.theme-paper {
+  --tw-shadow-color: rgba(0, 0, 0, 0.06);
+}
+
+/* --- Paper theme: fix low-contrast text colors --- */
+
+/* Orange / amber text → darker for readability on light bg */
+.theme-paper .text-orange-300 { color: #c2410c !important; }  /* orange-700 */
+.theme-paper .text-orange-400 { color: #c2410c !important; }
+.theme-paper .text-amber-200  { color: #92400e !important; }  /* amber-800 */
+.theme-paper .text-amber-300  { color: #b45309 !important; }  /* amber-700 */
+.theme-paper .text-amber-400  { color: #b45309 !important; }
+
+/* Red text → darker */
+.theme-paper .text-red-400    { color: #b91c1c !important; }  /* red-700 */
+.theme-paper .text-red-500    { color: #991b1b !important; }  /* red-800 */
+
+/* Green / emerald text → darker */
+.theme-paper .text-green-400  { color: #15803d !important; }  /* green-700 */
+.theme-paper .text-emerald-300 { color: #047857 !important; } /* emerald-700 */
+.theme-paper .text-emerald-400 { color: #047857 !important; }
+
+/* Purple / violet text → darker */
+.theme-paper .text-purple-400 { color: #7e22ce !important; }  /* purple-700 */
+.theme-paper .text-purple-500 { color: #6b21a8 !important; }  /* purple-800 */
+.theme-paper .text-violet-400 { color: #6d28d9 !important; }  /* violet-700 */
+
+/* Sky / teal / cyan / pink / rose text → darker */
+.theme-paper .text-sky-400    { color: #0369a1 !important; }  /* sky-700 */
+.theme-paper .text-teal-400   { color: #0f766e !important; }  /* teal-700 */
+.theme-paper .text-cyan-400   { color: #0e7490 !important; }  /* cyan-700 */
+.theme-paper .text-pink-400   { color: #be185d !important; }  /* pink-700 */
+.theme-paper .text-rose-400   { color: #be123c !important; }  /* rose-700 */
+
+/* Accent badge text in colored backgrounds → keep contrast */
+.theme-paper .text-accent-400 { color: #1d4e8a !important; }
+
+/* Tinted backgrounds → stronger opacity for light bg */
+.theme-paper .bg-orange-500\/10 { background-color: rgba(249, 115, 22, 0.15) !important; }
+.theme-paper .bg-orange-500\/15 { background-color: rgba(249, 115, 22, 0.20) !important; }
+.theme-paper .bg-amber-500\/15  { background-color: rgba(245, 158, 11, 0.20) !important; }
+.theme-paper .bg-red-500\/10    { background-color: rgba(239, 68, 68, 0.15) !important; }
+.theme-paper .bg-emerald-500\/15 { background-color: rgba(16, 185, 129, 0.18) !important; }
+.theme-paper .bg-purple-500\/5   { background-color: rgba(168, 85, 247, 0.10) !important; }
+.theme-paper .bg-purple-500\/20  { background-color: rgba(168, 85, 247, 0.25) !important; }
+.theme-paper .bg-purple-600\/80  { background-color: rgba(147, 51, 234, 0.90) !important; }
+
+/* Investigation / action button text-white overrides — keep white on colored bg */
+.theme-paper .bg-purple-600\/80 .text-white,
+.theme-paper .bg-purple-600\/80.text-white,
+.theme-paper .bg-purple-600.text-white,
+.theme-paper .bg-orange-600\/80 .text-white,
+.theme-paper .bg-orange-600\/80.text-white {
+  color: #fff !important;
+}

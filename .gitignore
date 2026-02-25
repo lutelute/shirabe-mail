@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-electron/
+monitor/release/
+.auto-claude/
+.auto-claude-security.json
+.auto-claude-status
+.claude_settings.json
+.mcp.json
+.DS_Store
+*.dmg

@@ -1,0 +1,47 @@
+appId: com.shirabe-mail.app
+productName: 調 - Shirabe
+directories:
+  buildResources: build
+  output: release
+files:
+  - dist-electron
+  - dist
+  - electron/preload.cjs
+  # Exclude ripgrep binaries for non-target platforms (saves ~39MB)
+  - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/arm64-linux"
+  - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-darwin"
+  - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-linux"
+  - "!node_modules/@anthropic-ai/claude-agent-sdk/vendor/ripgrep/x64-win32"
+  # Exclude unnecessary files from node_modules
+  - "!node_modules/**/{CHANGELOG,changelog,CHANGES,changes}.md"
+  - "!node_modules/**/{README,readme}.md"
+  - "!node_modules/**/test{,s}/**"
+  - "!node_modules/**/*.map"
+extraResources:
+  - from: "../mcp-server/build"
+    to: "mcp-server/build"
+    filter:
+      - "**/*.js"
+      - "**/*.json"
+asar: true
+asarUnpack:
+  - "node_modules/better-sqlite3/**"
+  - "node_modules/node-pty/**"
+mac:
+  target:
+    - target: dmg
+      arch:
+        - arm64
+  category: public.app-category.productivity
+  icon: build/icon.icns
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+dmg:
+  title: "${productName}"
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications

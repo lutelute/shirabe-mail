@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#3b82f6"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#818cf8;stop-opacity:0.6"/>
+      <stop offset="50%" style="stop-color:#6366f1;stop-opacity:0"/>
+    </linearGradient>
+  </defs>
+  <!-- Background -->
+  <rect width="1024" height="1024" rx="228" fill="url(#bg)"/>
+  <!-- Subtle shine -->
+  <rect width="1024" height="1024" rx="228" fill="url(#shine)"/>
+  <!-- Envelope body -->
+  <rect x="212" y="340" width="600" height="380" rx="40" fill="white" opacity="0.95"/>
+  <!-- Envelope flap (triangle) -->
+  <path d="M212,380 Q212,340 252,340 L772,340 Q812,340 812,380 L512,560 Z" fill="white"/>
+  <!-- Flap shadow line -->
+  <path d="M232,355 L512,540 L792,355" fill="none" stroke="#c7d2fe" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Notification badge -->
+  <circle cx="760" cy="320" r="64" fill="#f43f5e"/>
+  <text x="760" y="344" text-anchor="middle" font-family="-apple-system, SF Pro Rounded, Helvetica Neue, sans-serif" font-size="64" font-weight="700" fill="white">3</text>
+</svg>

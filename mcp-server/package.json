@@ -1,0 +1,20 @@
+{
+  "name": "shirabe-mcp-server",
+  "version": "1.0.0",
+  "description": "調 MCP Server - eM Client database tools for Claude Code",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node build/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "better-sqlite3": "^11.8.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.3"
+  }
+}
