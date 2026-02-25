@@ -183,6 +183,7 @@ export interface MailNote {
   history: NoteHistoryEntry[];
   quickLabel?: QuickLabel;
   tags?: string[];          // 複数タグID配列 (BUILTIN_TAGS.id | custom)
+  threadMessageCount?: number;  // スレッドメッセージ数（自動更新トリガー用）
   createdAt: string;
   updatedAt: string;
 }

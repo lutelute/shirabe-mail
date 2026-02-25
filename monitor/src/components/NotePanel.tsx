@@ -529,8 +529,8 @@ ${note.content || '(空)'}
     }
   }, [note, mail, apiKey, aiLoading, saveNote]);
 
-  // AI: Regenerate with full thread context
-  const handleRegenerate = useCallback(async () => {
+  // Shared: generate or update note with AI analysis
+  const generateOrUpdateNote = useCallback(async () => {
     if (!apiKey || aiLoading) return;
     setAiLoading(true);
     try {
@@ -610,6 +610,7 @@ ${existingNoteSection}
       const result = await window.electronAPI.runClaudeAnalysis(prompt, { mode: 'light' });
       if (result.status === 'done' && result.markdown) {
         const now = new Date().toISOString();
+        const threadCount = threadMessages?.length ?? 1;
 
         // Extract quickLabel from result
         let detectedLabel: QuickLabel | undefined;
@@ -627,10 +628,11 @@ ${existingNoteSection}
             ...note,
             content: result.markdown,
             quickLabel: detectedLabel || note.quickLabel,
+            threadMessageCount: threadCount,
             updatedAt: now,
             history: [
               ...note.history,
-              { timestamp: now, type: 'ai_proposal', content: `再生成（スレッド${threadMessages?.length || 1}通）: ${result.markdown.slice(0, 80)}` },
+              { timestamp: now, type: 'ai_proposal', content: `再生成（スレッド${threadCount}通）: ${result.markdown.slice(0, 80)}` },
             ],
           };
           saveNote(updated);
@@ -644,9 +646,10 @@ ${existingNoteSection}
             content: result.markdown,
             todos: [],
             quickLabel: detectedLabel,
+            threadMessageCount: threadCount,
             history: [
               { timestamp: now, type: 'created', content: 'ノート作成' },
-              { timestamp: now, type: 'ai_proposal', content: `再生成（スレッド${threadMessages?.length || 1}通）: ${result.markdown.slice(0, 80)}` },
+              { timestamp: now, type: 'ai_proposal', content: `AI自動生成（スレッド${threadCount}通）: ${result.markdown.slice(0, 80)}` },
             ],
             createdAt: now,
             updatedAt: now,
@@ -658,6 +661,27 @@ ${existingNoteSection}
       setAiLoading(false);
     }
   }, [note, mail, apiKey, aiLoading, threadMessages, noteId, saveNote]);
+
+  // AI: Regenerate (manual trigger — delegates to shared function)
+  const handleRegenerate = generateOrUpdateNote;
+
+  // Auto-generate: create note if none exists, or update if thread has grown
+  useEffect(() => {
+    if (!apiKey || aiLoading || loading) return;
+
+    const shouldGenerate = !note;
+    const shouldUpdate = note && threadMessages && threadMessages.length > 0
+      && (note.threadMessageCount ?? 0) < threadMessages.length;
+
+    if (!shouldGenerate && !shouldUpdate) return;
+
+    const timer = setTimeout(() => {
+      generateOrUpdateNote();
+    }, 500);
+
+    return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note, loading, noteId, threadMessages?.length, apiKey]);
 
   // Delete note
   const handleDelete = useCallback(async () => {
@@ -677,8 +701,18 @@ ${existingNoteSection}
 
   const activeLabelDef = note ? labelDef(note.quickLabel) : undefined;
 
-  // No note yet — show create button + quick labels
+  // No note yet — show create button + quick labels (or auto-generating indicator)
   if (!note) {
+    if (aiLoading) {
+      return (
+        <div className="mx-2 my-2 px-3 py-2 rounded-lg border-2 border-accent-500/30 bg-accent-500/8 shadow-sm">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold text-accent-400">&#9642; ノート</span>
+            <span className="text-[10px] text-purple-400 animate-pulse">AI分析中...</span>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="mx-2 my-2 px-3 py-2 rounded-lg border-2 border-accent-500/30 bg-accent-500/8 shadow-sm">
         <div className="flex items-center gap-1.5 flex-wrap">
