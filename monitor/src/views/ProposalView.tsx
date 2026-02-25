@@ -130,22 +130,37 @@ export default function ProposalView() {
             <p className="text-xs text-surface-400 truncate">{progressMessage}</p>
           )}
 
-          {/* Analysis log (visible during running) */}
-          {running && analysisLogs.length > 0 && (
-            <div className="max-h-40 overflow-y-auto bg-surface-950 border border-surface-700 rounded p-2 font-mono text-[10px] space-y-0.5">
-              {analysisLogs.map((entry, i) => (
-                <div key={i} className={`flex gap-1.5 ${
-                  entry.type === 'tool' ? 'text-cyan-400' :
-                  entry.type === 'result' ? 'text-emerald-400' :
-                  entry.type === 'error' ? 'text-red-400' :
-                  entry.type === 'text' ? 'text-surface-500' :
-                  'text-surface-400'
-                }`}>
-                  <span className="text-surface-600 flex-shrink-0">{entry.time}</span>
-                  <span className="truncate">{entry.type === 'tool' ? '\ud83d\udd0d ' : ''}{entry.message}</span>
-                </div>
-              ))}
-              <div ref={logEndRef} />
+          {/* Analysis log */}
+          {analysisLogs.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="text-[9px] text-surface-500">ログ ({analysisLogs.length})</span>
+                <button
+                  onClick={() => {
+                    const text = analysisLogs.map(e => `[${e.time}] [${e.type}] ${e.message}`).join('\n');
+                    navigator.clipboard.writeText(text);
+                  }}
+                  className="text-[9px] text-surface-500 hover:text-surface-200 transition-colors"
+                  title="ログをコピー"
+                >
+                  コピー
+                </button>
+              </div>
+              <div className="max-h-40 overflow-y-auto bg-surface-950 border border-surface-700 rounded p-2 font-mono text-[10px] space-y-0.5">
+                {analysisLogs.map((entry, i) => (
+                  <div key={i} className={`flex gap-1.5 ${
+                    entry.type === 'tool' ? 'text-cyan-400' :
+                    entry.type === 'result' ? 'text-emerald-400' :
+                    entry.type === 'error' ? 'text-red-400' :
+                    entry.type === 'text' ? 'text-surface-500' :
+                    'text-surface-400'
+                  }`}>
+                    <span className="text-surface-600 flex-shrink-0">{entry.time}</span>
+                    <span className="truncate">{entry.type === 'tool' ? '\ud83d\udd0d ' : ''}{entry.message}</span>
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
             </div>
           )}
 
