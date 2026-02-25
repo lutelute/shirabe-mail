@@ -273,8 +273,41 @@ export interface MoveToTrashResult {
   error?: string;
 }
 
+// === Shirabe Digest ===
+export interface ShirabeUrgentItem {
+  label: string;
+  source: 'mail' | 'calendar' | 'task' | 'deadline';
+  sourceId?: number;
+  accountEmail?: string;
+}
+
+export interface ShirabeThesisStatus {
+  student: string;
+  category: 'D' | 'M' | 'B';
+  phase: string;
+  nextMilestone: string;
+  daysLeft: number | null;
+}
+
+export interface ShirabeRoutineProgress {
+  month: number;
+  completed: number;
+  total: number;
+  pending: string[];
+}
+
+export interface ShirabeDigest {
+  date: string;
+  urgent: ShirabeUrgentItem[];
+  weekEvents: { date: string; summary: string; preparation?: string }[];
+  thesis: ShirabeThesisStatus[];
+  routine: ShirabeRoutineProgress;
+  lastUpdated: string;
+}
+
 // === View Navigation ===
 export type ViewType =
+  | 'shirabe'
   | 'mail'
   | 'calendar'
   | 'task'
