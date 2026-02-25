@@ -94,7 +94,16 @@ function ensureMcpConfig(): string {
       },
     },
   };
-  fs.writeFileSync(dest, JSON.stringify(config, null, 2), 'utf-8');
+  const json = JSON.stringify(config, null, 2);
+  fs.writeFileSync(dest, json, 'utf-8');
+
+  // ホームディレクトリの .mcp.json も更新（Claude CLI が CWD から自動検出するため）
+  try {
+    fs.writeFileSync(path.join(os.homedir(), '.mcp.json'), json, 'utf-8');
+  } catch (err) {
+    console.warn('[MCP] Failed to write ~/.mcp.json:', (err as Error).message);
+  }
+
   return dest;
 }
 
