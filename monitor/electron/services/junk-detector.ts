@@ -45,7 +45,7 @@ function isReplyOrForward(subject: string): boolean {
 
 /**
  * Check if a sender domain is in the whitelist.
- * Whitelist entries can be full domains (e.g. "u-fukui.ac.jp")
+ * Whitelist entries can be full domains (e.g. "example.ac.jp")
  * or partial suffixes (e.g. ".ac.jp" matches all academic domains).
  */
 function isWhitelistedSender(senderAddress: string, whitelistDomains: string[]): boolean {

@@ -574,7 +574,7 @@ export default function SettingsView() {
                   }}
                   rows={3}
                   className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white font-mono"
-                  placeholder="u-fukui.ac.jp&#10;.ac.jp&#10;example.com"
+                  placeholder="example.ac.jp&#10;.ac.jp&#10;example.com"
                 />
               </div>
             )}

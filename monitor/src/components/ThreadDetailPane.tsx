@@ -23,7 +23,7 @@ function classifySender(from: string): SenderCategory {
   const domain = email.split('@')[1] || '';
 
   // 大学: ac.jp, edu domains
-  if (/\.ac\.jp$|\.edu$|\.edu\.|u-fukui|university|大学/.test(domain) || /\.ac\.jp$|\.edu$/.test(email)) {
+  if (/\.ac\.jp$|\.edu$|\.edu\.|university|大学/.test(domain) || /\.ac\.jp$|\.edu$/.test(email)) {
     // Further distinguish admin vs academic
     if (/jimu|admin|office|gakumu|soumu|kyomu|事務|総務|学務|教務|支援|庶務|人事|経理|財務/.test(lower)) {
       return 'admin';

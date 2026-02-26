@@ -145,9 +145,9 @@ Detect deadlines from these patterns:
 2. **Language**: Analyze both Japanese and English content in emails
 3. **Thread Context**: If thread history is available, consider the full conversation
 4. **Account Context**: Consider which account received the email
-   - University accounts (u-fukui): Higher base relevance for institutional emails
+   - University accounts: Higher base relevance for institutional emails
    - Personal Gmail: Higher relevance for personal administrative tasks
-5. **Sender Recognition**: Known university domains (.ac.jp, u-fukui) get higher trust
+5. **Sender Recognition**: Known university domains (.ac.jp) get higher trust
 6. **Time Sensitivity**: Emails with near-term deadlines get priority boost
 7. **Deduplication**: If the same thread appears in multiple accounts, classify once
 
