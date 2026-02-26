@@ -252,6 +252,11 @@ function MailCellContent({
             </span>
           )}
           {mail.isFlagged && <span className="text-amber-400 text-[10px] flex-shrink-0">&#9733;</span>}
+          {mail.folderName && (
+            <span className="text-[8px] text-surface-500 bg-surface-700/60 px-1 py-px rounded flex-shrink-0 border border-surface-600/40">
+              {mail.folderName}
+            </span>
+          )}
           {tags.map(tag => {
             const colors = TAG_COLOR_MAP[tag.color] ?? { bg: 'bg-surface-600', text: 'text-surface-300' };
             return (

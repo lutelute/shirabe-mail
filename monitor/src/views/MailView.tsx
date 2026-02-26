@@ -467,14 +467,62 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
   const hasImapConfig = settings.imapConfigs.some((c) => c.credentials !== null);
   const activeColumns: MailColumnId[] = settings.mailColumns ?? ['unread', 'from', 'subject', 'importance', 'date'];
 
-  // Folder filter helpers
-  const uniqueFolders = useMemo(() => {
+  // Folder filter helpers — build tree structure
+  interface FolderTreeNode {
+    folder: FolderItem;
+    children: FolderTreeNode[];
+    depth: number;
+  }
+
+  const folderTree = useMemo((): FolderTreeNode[] => {
     const seen = new Map<number, FolderItem>();
     for (const f of folders) {
       if (!seen.has(f.id)) seen.set(f.id, f);
     }
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const all = [...seen.values()];
+    const childrenMap = new Map<number | null, FolderItem[]>();
+    for (const f of all) {
+      const parent = f.parentFolderId;
+      if (!childrenMap.has(parent)) childrenMap.set(parent, []);
+      childrenMap.get(parent)!.push(f);
+    }
+    // Sort children alphabetically
+    for (const [, children] of childrenMap) {
+      children.sort((a, b) => a.name.localeCompare(b.name));
+    }
+    // Build tree recursively
+    function build(parentId: number | null, depth: number): FolderTreeNode[] {
+      const children = childrenMap.get(parentId) ?? [];
+      return children.map(f => ({
+        folder: f,
+        children: build(f.id, depth + 1),
+        depth,
+      }));
+    }
+    // Find root parents: folders whose parentFolderId is null or whose parent is not in the set
+    const idSet = new Set(all.map(f => f.id));
+    const roots = all.filter(f => f.parentFolderId === null || !idSet.has(f.parentFolderId));
+    const rootIds = new Set(roots.map(r => r.parentFolderId));
+    // Build from all root parent IDs
+    const tree: FolderTreeNode[] = [];
+    for (const rid of rootIds) {
+      tree.push(...build(rid, 0));
+    }
+    return tree;
   }, [folders]);
+
+  // Flatten tree for rendering (with depth info)
+  const flatFolderTree = useMemo(() => {
+    const result: FolderTreeNode[] = [];
+    function walk(nodes: FolderTreeNode[]) {
+      for (const n of nodes) {
+        result.push(n);
+        walk(n.children);
+      }
+    }
+    walk(folderTree);
+    return result;
+  }, [folderTree]);
 
   const toggleFolder = useCallback((id: number) => {
     setSelectedFolderIds(prev => {
@@ -534,21 +582,33 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
                   {selectedFolderIds.size > 0 && !selectedFolderIds.has(-1) ? `フォルダ(${selectedFolderIds.size})` : 'フォルダ'}
                 </button>
                 {showFolderFilter && (
-                  <div className="absolute top-full left-0 z-50 mt-1 bg-surface-800 border border-surface-600 rounded shadow-lg p-2 min-w-[180px] max-h-[300px] overflow-y-auto">
-                    <div className="flex gap-1 mb-1">
+                  <div className="absolute top-full left-0 z-50 mt-1 bg-surface-800 border border-surface-600 rounded shadow-lg p-2 min-w-[220px] max-h-[300px] overflow-y-auto">
+                    <div className="flex gap-1 mb-1.5 pb-1 border-b border-surface-700">
                       <button onClick={selectInboxOnly} className="text-[9px] px-1 py-0.5 bg-accent-500/20 text-accent-400 rounded hover:bg-accent-500/30">受信トレイのみ</button>
                       <button onClick={selectAllFolders} className="text-[9px] px-1 py-0.5 bg-surface-700 text-surface-300 rounded hover:bg-surface-600">全て</button>
                       <button onClick={selectNoFolders} className="text-[9px] px-1 py-0.5 bg-surface-700 text-surface-300 rounded hover:bg-surface-600">クリア</button>
                     </div>
-                    {uniqueFolders.map(f => (
-                      <label key={f.id} className="flex items-center gap-1.5 text-[10px] py-0.5 cursor-pointer text-surface-300 hover:text-surface-100">
+                    {flatFolderTree.map(node => (
+                      <label
+                        key={node.folder.id}
+                        className="flex items-center gap-1.5 text-[10px] py-0.5 cursor-pointer text-surface-300 hover:text-surface-100"
+                        style={{ paddingLeft: `${node.depth * 12 + 2}px` }}
+                      >
                         <input
                           type="checkbox"
-                          checked={selectedFolderIds.has(f.id)}
-                          onChange={() => toggleFolder(f.id)}
-                          className="w-3 h-3"
+                          checked={selectedFolderIds.has(node.folder.id)}
+                          onChange={() => toggleFolder(node.folder.id)}
+                          className="w-3 h-3 flex-shrink-0"
                         />
-                        <span className="truncate">{f.name}</span>
+                        {node.children.length > 0 && (
+                          <span className="text-[8px] text-surface-500 flex-shrink-0">
+                            {node.children.some(c => selectedFolderIds.has(c.folder.id)) ? '▼' : '▶'}
+                          </span>
+                        )}
+                        <span className="truncate">{node.folder.name}</span>
+                        {INBOX_NAMES.has(node.folder.name.toLowerCase()) && (
+                          <span className="text-[8px] text-accent-400 flex-shrink-0">★</span>
+                        )}
                       </label>
                     ))}
                   </div>

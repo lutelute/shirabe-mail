@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRoutineProgress, MailNote, MailItem, ViewType } from '../types';
 import { BUILTIN_TAGS } from '../types';
 import { useNoteService } from '../context/NoteServiceContext';
+import { isSpamFolder } from '../hooks/useMailData';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 interface ShirabeViewProps {
@@ -137,6 +138,8 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
       }
 
       events.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
+      // Filter out spam/junk/trash/drafts folders
+      unreadMails = unreadMails.filter(m => !isSpamFolder(m.folderName));
       unreadMails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setUnreadMails(unreadMails);
 
