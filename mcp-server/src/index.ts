@@ -21,6 +21,7 @@ import { moveToTrash } from './tools/move-to-trash.js';
 import { copyMailToFolder } from './tools/copy-mail-to-folder.js';
 import { getSentMails } from './tools/get-sent-mails.js';
 import { getDeadlineItems } from './tools/get-deadline-items.js';
+import { ensureNotesDir, findNotePath } from './utils.js';
 
 const server = new McpServer({
   name: 'shirabe',
@@ -388,27 +389,16 @@ server.tool(
   },
   async (params) => {
     const fs = await import('fs');
-    const path = await import('path');
-    const os = await import('os');
-
-    // Notes are stored in Electron's userData dir
-    const notesDir = path.join(
-      os.homedir(), 'Library', 'Application Support', '調 - Shirabe', 'notes',
-    );
-    if (!fs.existsSync(notesDir)) {
-      fs.mkdirSync(notesDir, { recursive: true });
-    }
-
-    const noteFileName = `mail-${params.mail_id}`;
-    const notePath = path.join(notesDir, `${noteFileName}.json`);
+    const notesDir = ensureNotesDir();
+    const found = findNotePath(params.mail_id);
     const now = new Date().toISOString();
 
     let note: Record<string, unknown>;
-    if (fs.existsSync(notePath)) {
-      note = JSON.parse(fs.readFileSync(notePath, 'utf-8'));
+    if (found.exists) {
+      note = JSON.parse(fs.readFileSync(found.path, 'utf-8'));
     } else {
       note = {
-        id: noteFileName,
+        id: found.id,
         mailId: params.mail_id,
         accountEmail: params.account,
         subject: '',
@@ -431,7 +421,7 @@ server.tool(
     note.tags = tags;
     note.updatedAt = now;
 
-    fs.writeFileSync(notePath, JSON.stringify(note, null, 2), 'utf-8');
+    fs.writeFileSync(found.path, JSON.stringify(note, null, 2), 'utf-8');
 
     return {
       content: [{ type: 'text', text: JSON.stringify({ mail_id: params.mail_id, tags }, null, 2) }],
@@ -449,26 +439,147 @@ server.tool(
   },
   async (params) => {
     const fs = await import('fs');
-    const path = await import('path');
-    const os = await import('os');
+    const found = findNotePath(params.mail_id);
 
-    const notesDir = path.join(
-      os.homedir(), 'Library', 'Application Support', '調 - Shirabe', 'notes',
-    );
-    const noteFileName = `mail-${params.mail_id}`;
-    const notePath = path.join(notesDir, `${noteFileName}.json`);
-
-    if (!fs.existsSync(notePath)) {
+    if (!found.exists) {
       return {
         content: [{ type: 'text', text: JSON.stringify({ mail_id: params.mail_id, tags: [] }) }],
       };
     }
 
-    const note = JSON.parse(fs.readFileSync(notePath, 'utf-8'));
+    const note = JSON.parse(fs.readFileSync(found.path, 'utf-8'));
     const tags = note.tags ?? (note.quickLabel ? [note.quickLabel] : []);
 
     return {
       content: [{ type: 'text', text: JSON.stringify({ mail_id: params.mail_id, tags }, null, 2) }],
+    };
+  },
+);
+
+// --- get_note ---
+server.tool(
+  'get_note',
+  'Read the existing note for a mail. Returns note content, todos, tags, and history. Returns null if no note exists.',
+  {
+    mail_id: z.number().int().describe('The mail ID'),
+    account: z.string().describe('The account email address'),
+  },
+  async (params) => {
+    const fs = await import('fs');
+    const found = findNotePath(params.mail_id);
+
+    if (!found.exists) {
+      return {
+        content: [{ type: 'text', text: JSON.stringify({ mail_id: params.mail_id, note: null }) }],
+      };
+    }
+
+    const note = JSON.parse(fs.readFileSync(found.path, 'utf-8'));
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ mail_id: params.mail_id, note }, null, 2) }],
+    };
+  },
+);
+
+// --- update_note ---
+server.tool(
+  'update_note',
+  'Create or update a mail note with investigation findings. Merges with existing content. Use after analyzing a thread to persist results.',
+  {
+    mail_id: z.number().int().describe('The mail ID'),
+    account: z.string().describe('The account email address'),
+    subject: z.string().optional().describe('Mail subject (used when creating new note)'),
+    content: z.string().describe('Markdown content for the note (analysis results, summary, etc.)'),
+    todos: z.array(z.string()).optional().describe('Array of todo text items to add'),
+    tags: z.array(z.string()).optional().describe('Tag IDs to set: reply, action, hold, done, unnecessary, info, urgent'),
+    replace_content: z.boolean().default(false).describe('If true, replace entire content. If false, append new content with timestamp separator.'),
+  },
+  async (params) => {
+    const fs = await import('fs');
+    ensureNotesDir();
+    const found = findNotePath(params.mail_id);
+    const now = new Date().toISOString();
+    const dateLabel = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+    let note: Record<string, unknown>;
+    if (found.exists) {
+      note = JSON.parse(fs.readFileSync(found.path, 'utf-8'));
+    } else {
+      note = {
+        id: found.id,
+        mailId: params.mail_id,
+        accountEmail: params.account,
+        subject: params.subject ?? '',
+        content: '',
+        todos: [],
+        tags: [],
+        history: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+
+    // Update subject if provided and empty
+    if (params.subject && !(note.subject as string)) {
+      note.subject = params.subject;
+    }
+
+    // Update content
+    const existingContent = (note.content as string) ?? '';
+    if (params.replace_content || !existingContent.trim()) {
+      note.content = params.content;
+    } else {
+      // Append with separator
+      note.content = `${existingContent}\n\n---\n_更新: ${dateLabel}_\n\n${params.content}`;
+    }
+
+    // Merge todos
+    if (params.todos && params.todos.length > 0) {
+      const existingTodos = (note.todos as Array<{ id: string; text: string; completed: boolean; createdAt: string }>) ?? [];
+      const existingTexts = new Set(existingTodos.map(t => t.text));
+      for (const text of params.todos) {
+        if (!existingTexts.has(text)) {
+          existingTodos.push({
+            id: `todo-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            text,
+            completed: false,
+            createdAt: now,
+          });
+        }
+      }
+      note.todos = existingTodos;
+    }
+
+    // Merge tags
+    if (params.tags && params.tags.length > 0) {
+      const existingTags = (note.tags as string[]) ?? [];
+      note.tags = [...new Set([...existingTags, ...params.tags])];
+    }
+
+    // Add history entry
+    const history = (note.history as Array<Record<string, string>>) ?? [];
+    history.push({
+      timestamp: now,
+      type: found.exists ? 'updated' : 'created',
+      content: `MCP調査結果を${found.exists ? '更新' : '作成'}`,
+    });
+    note.history = history;
+    note.updatedAt = now;
+
+    fs.writeFileSync(found.path, JSON.stringify(note, null, 2), 'utf-8');
+
+    return {
+      content: [{
+        type: 'text',
+        text: JSON.stringify({
+          mail_id: params.mail_id,
+          note_id: note.id,
+          status: found.exists ? 'updated' : 'created',
+          content_length: (note.content as string).length,
+          todo_count: (note.todos as unknown[]).length,
+          tags: note.tags,
+        }, null, 2),
+      }],
     };
   },
 );

@@ -400,9 +400,16 @@ export default function MailView({ onNavigate }: MailViewProps) {
 ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
 
 ## 調査手順
-1. get_mail_detail でメール本文の詳細を取得
-2. get_mail_thread でスレッド全体の文脈を確認
-3. 必要に応じて関連メールを search_mails で検索
+1. mcp__shirabe__get_note でこのメールの既存ノートを確認
+2. mcp__shirabe__get_mail_detail でメール本文の詳細を取得
+3. mcp__shirabe__get_mail_thread でスレッド全体の文脈を確認
+4. 必要に応じて mcp__shirabe__search_mails で関連メールを検索
+5. mcp__shirabe__analyze_thread でアクション項目・緊急度を構造化分析
+6. 分析結果を mcp__shirabe__update_note でノートに保存（既存ノートがあれば差分のみ追記）
+   - content: 調査結果のMarkdown
+   - todos: 具体的なアクション項目（テキスト配列）
+   - tags: カテゴリ（urgent/reply/action/info/unnecessary/hold）
+7. 必要に応じて mcp__shirabe__tag_mail でタグ付け
 
 ## 出力形式（Markdown）
 # 調査結果: ${mail.subject}

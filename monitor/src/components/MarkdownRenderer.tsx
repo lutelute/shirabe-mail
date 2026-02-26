@@ -1,3 +1,4 @@
+import React from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { Components } from 'react-markdown';
@@ -6,6 +7,44 @@ interface Props {
   children: string;
   /** Compact mode for sidebar panels (smaller text/spacing) */
   compact?: boolean;
+}
+
+// --- Category badge color rules ---
+interface BadgeStyle {
+  bg: string;
+  text: string;
+  border: string;
+}
+
+const BADGE_RULES: Record<string, BadgeStyle> = {
+  '至急':   { bg: 'bg-red-500/20',    text: 'text-red-400',    border: 'border-red-500/30' },
+  '要返信': { bg: 'bg-amber-500/20',  text: 'text-amber-400',  border: 'border-amber-500/30' },
+  '要対応': { bg: 'bg-blue-500/20',   text: 'text-blue-400',   border: 'border-blue-500/30' },
+  '情報':   { bg: 'bg-surface-600/30', text: 'text-surface-400', border: 'border-surface-500/30' },
+  '不要':   { bg: 'bg-surface-700/30', text: 'text-surface-500', border: 'border-surface-600/30' },
+  '保留':   { bg: 'bg-purple-500/20', text: 'text-purple-400', border: 'border-purple-500/30' },
+};
+
+function renderStrongWithBadge(children: React.ReactNode): React.ReactElement {
+  const text = typeof children === 'string' ? children : String(children ?? '');
+  // Match 【カテゴリ】 pattern
+  const match = text.match(/^【(.+?)】(.*)$/);
+  if (match) {
+    const category = match[1];
+    const rest = match[2];
+    const style = BADGE_RULES[category];
+    if (style) {
+      return (
+        <span className="inline-flex items-center gap-1">
+          <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-bold border ${style.bg} ${style.text} ${style.border}`}>
+            {category}
+          </span>
+          {rest && <strong className="text-surface-100 font-semibold">{rest}</strong>}
+        </span>
+      );
+    }
+  }
+  return <strong className="text-surface-100 font-semibold">{children}</strong>;
 }
 
 const compactComponents: Components = {
@@ -35,9 +74,7 @@ const compactComponents: Components = {
   li: ({ children }) => (
     <li className="text-[13px] text-surface-300 leading-relaxed">{children}</li>
   ),
-  strong: ({ children }) => (
-    <strong className="text-surface-100 font-semibold">{children}</strong>
-  ),
+  strong: ({ children }) => renderStrongWithBadge(children),
   a: ({ href, children }) => (
     <a href={href} className="text-accent-400 hover:text-accent-300 underline underline-offset-2" target="_blank" rel="noreferrer">
       {children}
@@ -131,9 +168,7 @@ const fullComponents: Components = {
   li: ({ children }) => (
     <li className="text-sm text-surface-300 leading-relaxed">{children}</li>
   ),
-  strong: ({ children }) => (
-    <strong className="text-surface-100 font-semibold">{children}</strong>
-  ),
+  strong: ({ children }) => renderStrongWithBadge(children),
   a: ({ href, children }) => (
     <a href={href} className="text-accent-400 hover:text-accent-300 underline underline-offset-2" target="_blank" rel="noreferrer">
       {children}
