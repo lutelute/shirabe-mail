@@ -72,9 +72,6 @@ function buildLightPrompt(
 
   return `あなたは業務メール分析のエキスパートです。以下のメールスレッド全文を読み、この案件について深く分析してください。
 
-重要: 分析は必ず「メール情報」に記載された件名（"${mail.subject}"）のメールについて行ってください。
-スレッド内に無関係なメッセージが含まれている場合は無視してください。
-
 === メール情報 ===
 件名: ${mail.subject}
 差出人: ${mail.from?.displayName || mail.from?.address || '不明'}
