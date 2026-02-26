@@ -147,6 +147,23 @@ const api = {
     ipcRenderer.invoke('generateReplyDraft', params),
   openMailCompose: (params: any) =>
     ipcRenderer.invoke('openMailCompose', params),
+  // Open specific mail in eM Client (AppleScript search)
+  openMailInEmClient: (params: { subject: string; fromAddress?: string }) =>
+    ipcRenderer.invoke('openMailInEmClient', params),
+  // Auto-tag mails
+  autoTagMails: (params: any) =>
+    ipcRenderer.invoke('autoTagMails', params),
+  // Update notification listeners
+  onUpdateAvailable: (callback: (info: any) => void) => {
+    const handler = (_event: any, info: any) => callback(info);
+    ipcRenderer.on('updateAvailable', handler);
+    return () => ipcRenderer.removeListener('updateAvailable', handler);
+  },
+  onUpdateInstallProgress: (callback: (progress: any) => void) => {
+    const handler = (_event: any, progress: any) => callback(progress);
+    ipcRenderer.on('updateInstallProgress', handler);
+    return () => ipcRenderer.removeListener('updateInstallProgress', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

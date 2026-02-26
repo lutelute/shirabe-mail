@@ -287,13 +287,22 @@ export default function ThreadDetailPane({
                 ) : '調査'}
               </button>
             )}
-            {/* Open in eM Client button */}
+            {/* Open in eM Client button — search by subject */}
             <button
-              onClick={() => window.electronAPI.openExternalUrl('emclient://')}
+              onClick={() => {
+                if (selectedMail) {
+                  window.electronAPI.openMailInEmClient({
+                    subject: selectedMail.subject,
+                    fromAddress: selectedMail.from?.address,
+                  });
+                } else {
+                  window.electronAPI.openExternalUrl('emclient://');
+                }
+              }}
               className="px-1.5 py-0.5 text-[9px] bg-surface-700 hover:bg-surface-600 text-surface-300 rounded transition-colors"
-              title="eM Clientを開く"
+              title="eM Clientでこのメールを検索して開く"
             >
-              Open
+              eM Client
             </button>
           </div>
         </div>
@@ -558,13 +567,25 @@ export default function ThreadDetailPane({
               >
                 {draftCopied ? 'コピー済' : 'コピー'}
               </button>
-              {/* eM Clientで送信 (コピー→起動) */}
+              {/* eM Clientで送信 (mailto: で下書き作成) */}
               <button
                 onClick={() => {
-                  navigator.clipboard.writeText(draftText);
-                  setDraftCopied(true);
-                  setTimeout(() => setDraftCopied(false), 2000);
-                  window.electronAPI.openExternalUrl('emclient://');
+                  if (selectedMail) {
+                    const replyTo = selectedMail.from?.address || '';
+                    const reSubject = selectedMail.subject.startsWith('Re:')
+                      ? selectedMail.subject
+                      : `Re: ${selectedMail.subject}`;
+                    window.electronAPI.openMailCompose({
+                      to: replyTo,
+                      subject: reSubject,
+                      body: draftText,
+                    });
+                  } else {
+                    navigator.clipboard.writeText(draftText);
+                    setDraftCopied(true);
+                    setTimeout(() => setDraftCopied(false), 2000);
+                    window.electronAPI.openExternalUrl('emclient://');
+                  }
                 }}
                 disabled={!draftText.trim()}
                 className="px-2 py-0.5 text-[10px] bg-surface-700 hover:bg-surface-600 text-surface-300 rounded transition-colors disabled:opacity-40"

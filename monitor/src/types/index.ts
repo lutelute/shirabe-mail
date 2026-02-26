@@ -587,6 +587,8 @@ export interface ElectronAPI {
     existingDraft?: string;
   }) => Promise<{ status: string; draft: string; error?: string }>;
   openMailCompose: (params: { to: string; subject: string; body: string; cc?: string }) => Promise<void>;
+  // Open specific mail in eM Client
+  openMailInEmClient: (params: { subject: string; fromAddress?: string }) => Promise<{ success: boolean; error?: string }>;
   // AI auto-tagging
   autoTagMails: (params: {
     mails: { id: number; subject: string; preview: string; from: string }[];

@@ -1854,6 +1854,54 @@ JSON以外の説明は不要です。`;
     const mailto = `mailto:${encodeURIComponent(params.to)}?${parts.join('&')}`;
     await shell.openExternal(mailto);
   });
+
+  // Open a specific mail in eM Client via AppleScript search
+  ipcMain.handle('openMailInEmClient', async (_event, params: {
+    subject: string;
+    fromAddress?: string;
+  }): Promise<{ success: boolean; error?: string }> => {
+    try {
+      // Write search query to temp file (avoids all escaping issues with Japanese/special chars)
+      const tmpQuery = path.join(os.tmpdir(), 'shirabe-search-query.txt');
+      fs.writeFileSync(tmpQuery, params.subject, 'utf-8');
+
+      const script = [
+        `set queryText to (read POSIX file "${tmpQuery}" as «class utf8»)`,
+        'set the clipboard to queryText',
+        'tell application "eM Client"',
+        '    activate',
+        '    go to Mail',
+        'end tell',
+        'delay 0.4',
+        'tell application "System Events"',
+        '    tell process "eM Client"',
+        '        keystroke "e" using {command down}',
+        '        delay 0.2',
+        '        keystroke "a" using {command down}',
+        '        delay 0.1',
+        '        keystroke "v" using {command down}',
+        '        delay 0.1',
+        '        key code 36',
+        '    end tell',
+        'end tell',
+      ].join('\n');
+
+      const tmpScript = path.join(os.tmpdir(), 'shirabe-emclient-open.scpt');
+      fs.writeFileSync(tmpScript, script, 'utf-8');
+      execSync(`osascript "${tmpScript}"`, { timeout: 10000 });
+      try { fs.unlinkSync(tmpScript); fs.unlinkSync(tmpQuery); } catch { /* noop */ }
+
+      return { success: true };
+    } catch (err) {
+      // Fallback: just open eM Client
+      try {
+        await shell.openExternal('emclient://');
+        return { success: true };
+      } catch {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+  });
 }
 
 // --- userData migration from old app name ---

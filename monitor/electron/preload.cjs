@@ -156,6 +156,9 @@ const api = {
     ipcRenderer.invoke('generateReplyDraft', params),
   openMailCompose: (params) =>
     ipcRenderer.invoke('openMailCompose', params),
+  // Open specific mail in eM Client (AppleScript search)
+  openMailInEmClient: (params) =>
+    ipcRenderer.invoke('openMailInEmClient', params),
   // AI auto-tagging
   autoTagMails: (params) =>
     ipcRenderer.invoke('autoTagMails', params),

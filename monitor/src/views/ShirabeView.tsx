@@ -312,7 +312,16 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
                 const primaryTag = tags[0];
                 const tagInfo = primaryTag ? getTagInfo(primaryTag) : null;
                 return (
-                  <li key={i} className="flex items-start gap-2 text-sm">
+                  <li
+                    key={i}
+                    className="flex items-start gap-2 text-sm cursor-pointer hover:bg-surface-800/50 rounded px-1 py-0.5 -mx-1 transition-colors"
+                    onClick={() => {
+                      window.electronAPI.openMailInEmClient({
+                        subject: note.subject,
+                      });
+                    }}
+                    title="クリックでeM Clientで開く"
+                  >
                     {tagInfo ? (
                       <span className={`text-[9px] px-1.5 py-px rounded border flex-shrink-0 mt-0.5 ${tagInfo.bg} ${tagInfo.text} ${tagInfo.border}`}>
                         {tagInfo.label}
@@ -321,6 +330,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
                       <span className="text-red-400 mt-0.5 flex-shrink-0">!</span>
                     )}
                     <span className="text-surface-300 line-clamp-1">{note.subject}</span>
+                    <span className="text-[8px] text-surface-600 flex-shrink-0 mt-0.5 ml-auto">eM</span>
                   </li>
                 );
               })}
@@ -405,7 +415,16 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           ) : (
             <ul className="space-y-1.5">
               {digest.urgent.filter(u => u.source === 'mail').map((item, i) => (
-                <li key={i} className="text-sm text-surface-300 line-clamp-1">
+                <li
+                  key={i}
+                  className="text-sm text-surface-300 line-clamp-1 cursor-pointer hover:bg-surface-800/50 rounded px-1 py-0.5 -mx-1 transition-colors"
+                  onClick={() => {
+                    // Extract subject from label (format: "subject — sender")
+                    const subject = item.label.split(' — ')[0];
+                    window.electronAPI.openMailInEmClient({ subject });
+                  }}
+                  title="クリックでeM Clientで開く"
+                >
                   {item.label}
                 </li>
               ))}

@@ -563,6 +563,12 @@ export default function MailTable({
             <div key={`${mail.accountEmail}-${mail.id}`}>
               <div
                 onClick={() => handleRowClick(mail)}
+                onDoubleClick={() => {
+                  window.electronAPI.openMailInEmClient({
+                    subject: mail.subject,
+                    fromAddress: mail.from?.address,
+                  });
+                }}
                 onMouseEnter={(e) => handleRowEnter(mail, e)}
                 onMouseMove={(e) => handleRowMove(mail, e)}
                 onMouseLeave={handleRowLeave}
