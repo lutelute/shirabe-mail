@@ -458,32 +458,42 @@ export default function NotePanel({ mail, apiKey, threadMessages }: NotePanelPro
     saveNote(updated);
   }, [note, saveNote]);
 
+  // Validate threadMessages belong to the current mail (prevent race condition)
+  const validThreadMessages = (() => {
+    if (!threadMessages || threadMessages.length === 0) return [];
+    // Check that at least one thread message matches the current mail's subject or id
+    const hasMatchingMsg = threadMessages.some(
+      m => m.id === mail.id || m.subject === mail.subject
+    );
+    return hasMatchingMsg ? threadMessages : [];
+  })();
+
   // Delegate generation to NoteService (background, survives view changes)
   const handleRegenerate = useCallback(() => {
-    noteService.requestGeneration(mail, threadMessages ?? [], 'deep', note);
-  }, [noteService, mail, threadMessages, note]);
+    noteService.requestGeneration(mail, validThreadMessages, 'deep', note);
+  }, [noteService, mail, validThreadMessages, note]);
 
   const handleLightGenerate = useCallback(() => {
-    noteService.requestGeneration(mail, threadMessages ?? [], 'light', note);
-  }, [noteService, mail, threadMessages, note]);
+    noteService.requestGeneration(mail, validThreadMessages, 'light', note);
+  }, [noteService, mail, validThreadMessages, note]);
 
   // Auto-generate: when no note exists or thread has grown
   useEffect(() => {
     if (aiLoading || loading) return;
 
     const shouldGenerate = !note;
-    const shouldUpdate = note && threadMessages && threadMessages.length > 0
-      && (note.threadMessageCount ?? 0) < threadMessages.length;
+    const shouldUpdate = note && validThreadMessages.length > 0
+      && (note.threadMessageCount ?? 0) < validThreadMessages.length;
 
     if (!shouldGenerate && !shouldUpdate) return;
 
     const timer = setTimeout(() => {
-      noteService.requestGeneration(mail, threadMessages ?? [], 'light', note);
+      noteService.requestGeneration(mail, validThreadMessages, 'light', note);
     }, 500);
 
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note, loading, noteId, threadMessages?.length]);
+  }, [note, loading, noteId, validThreadMessages.length]);
 
   // Delete note
   const handleDelete = useCallback(async () => {

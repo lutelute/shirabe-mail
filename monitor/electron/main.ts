@@ -206,16 +206,16 @@ function getThreadMessagesFromDb(
   const db = copyAndOpenDb(acc.accountUid, acc.mailSubdir, 'mail_index.dat');
 
   try {
-    // Get conversationId from target mail
+    // Get conversationId and subject from target mail
     const target = db
-      .prepare('SELECT conversationId FROM MailItems WHERE id = ?')
-      .get(mailId) as { conversationId: string } | undefined;
+      .prepare('SELECT conversationId, subject FROM MailItems WHERE id = ?')
+      .get(mailId) as { conversationId: string; subject: string } | undefined;
     if (!target?.conversationId) {
       throw new Error(`Mail not found or no conversationId: ${mailId}`);
     }
 
     // Get all messages in conversation
-    const rows = db
+    let rows = db
       .prepare(
         `SELECT id, subject, date, preview, flags, folder
          FROM MailItems
@@ -230,6 +230,24 @@ function getThreadMessagesFromDb(
       flags: number;
       folder: number;
     }>;
+
+    // Filter out messages with completely unrelated subjects
+    // (eM Client sometimes groups unrelated automated mails under the same conversationId)
+    if (rows.length > 1) {
+      const targetBase = (target.subject || '').replace(/^(Re:\s*|Fwd?:\s*|Fw:\s*)+/i, '').trim().toLowerCase();
+      if (targetBase) {
+        const filtered = rows.filter(r => {
+          const base = (r.subject || '').replace(/^(Re:\s*|Fwd?:\s*|Fw:\s*)+/i, '').trim().toLowerCase();
+          // Keep if: same base subject, or one contains the other, or is the target mail itself
+          return r.id === mailId || base === targetBase
+            || base.includes(targetBase) || targetBase.includes(base);
+        });
+        // Only use filtered if it still contains the target mail
+        if (filtered.length > 0 && filtered.some(r => r.id === mailId)) {
+          rows = filtered;
+        }
+      }
+    }
 
     // Get folder map
     const folderMap = new Map<number, string>();
