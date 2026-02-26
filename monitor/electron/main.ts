@@ -413,6 +413,7 @@ function createWindow(): void {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      webviewTag: true,
       preload: path.join(__dirname, '..', 'electron', 'preload.cjs'),
     },
   });

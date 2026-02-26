@@ -1,40 +1,23 @@
+import { useRef, useEffect, useState } from 'react';
 import { useAppContext } from '../context/AppContext';
 import type { ViewType } from '../types';
 import EmptyState from '../components/shared/EmptyState';
 
 /**
- * Normalize a Google Calendar URL to an embeddable format.
+ * Normalize a Google Calendar URL.
  * Accepts:
- *   - Plain email address → embed URL
- *   - Regular URL → convert to embed if possible
- *   - Embed URL → use as-is
+ *   - Plain email address → full calendar URL
+ *   - Regular URL → use as-is
  */
-function toEmbedUrl(input: string): string {
+function normalizeCalendarUrl(input: string): string {
   const trimmed = input.trim();
   if (!trimmed) return '';
 
-  // Plain email → embed URL
+  // Plain email → full calendar URL (not embed — webview can handle full UI)
   if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(trimmed)) {
-    return `https://calendar.google.com/calendar/embed?src=${encodeURIComponent(trimmed)}&ctz=Asia/Tokyo`;
+    return `https://calendar.google.com/calendar/u/0/r`;
   }
 
-  // Already an embed URL
-  if (trimmed.includes('/calendar/embed')) {
-    return trimmed;
-  }
-
-  // Regular Google Calendar URL → convert to embed
-  if (trimmed.includes('calendar.google.com')) {
-    // Extract email from URL if possible
-    const srcMatch = trimmed.match(/[?&]src=([^&]+)/);
-    if (srcMatch) {
-      return `https://calendar.google.com/calendar/embed?src=${srcMatch[1]}&ctz=Asia/Tokyo`;
-    }
-    // Try to convert /r URL to embed
-    return `https://calendar.google.com/calendar/embed?ctz=Asia/Tokyo`;
-  }
-
-  // Other URL — try as-is
   try {
     new URL(trimmed);
     return trimmed;
@@ -43,10 +26,29 @@ function toEmbedUrl(input: string): string {
   }
 }
 
+
 export default function CalendarView({ onNavigate }: { onNavigate?: (view: ViewType) => void }) {
   const { settings } = useAppContext();
+  const webviewRef = useRef<HTMLElement>(null);
+  const [loading, setLoading] = useState(true);
 
-  const calendarUrl = toEmbedUrl(settings.googleCalendarUrl ?? '');
+  const calendarUrl = normalizeCalendarUrl(settings.googleCalendarUrl ?? '');
+
+  useEffect(() => {
+    const wv = webviewRef.current as any;
+    if (!wv) return;
+
+    const onDidFinish = () => setLoading(false);
+    const onDidStart = () => setLoading(true);
+
+    wv.addEventListener('did-finish-load', onDidFinish);
+    wv.addEventListener('did-start-loading', onDidStart);
+
+    return () => {
+      wv.removeEventListener('did-finish-load', onDidFinish);
+      wv.removeEventListener('did-start-loading', onDidStart);
+    };
+  }, [calendarUrl]);
 
   if (!settings.googleCalendarUrl?.trim()) {
     return (
@@ -80,12 +82,17 @@ export default function CalendarView({ onNavigate }: { onNavigate?: (view: ViewT
         <span className="text-[10px] text-surface-500">Google Calendar</span>
       </div>
       <div className="flex-1 relative">
-        <iframe
+        {loading && (
+          <div className="absolute inset-0 flex items-center justify-center z-10">
+            <p className="text-xs text-surface-500 animate-pulse">読み込み中...</p>
+          </div>
+        )}
+        <webview
+          ref={webviewRef as any}
           src={calendarUrl}
-          className="absolute inset-0 w-full h-full border-0"
-          sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
-          referrerPolicy="no-referrer-when-downgrade"
-          title="Google Calendar"
+          partition="persist:calendar"
+          allowpopups={true}
+          style={{ width: '100%', height: '100%', border: 'none' }}
         />
       </div>
     </div>
