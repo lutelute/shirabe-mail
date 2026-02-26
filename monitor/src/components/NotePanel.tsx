@@ -662,8 +662,122 @@ ${existingNoteSection}
     }
   }, [note, mail, apiKey, aiLoading, threadMessages, noteId, saveNote]);
 
-  // AI: Regenerate (manual trigger — delegates to shared function)
-  const handleRegenerate = generateOrUpdateNote;
+  // AI: Deep regeneration (MCP tools for thorough analysis + note save)
+  const handleDeepRegenerate = useCallback(async () => {
+    if (!apiKey || aiLoading) return;
+    setAiLoading(true);
+    try {
+      const prompt = `あなたはメール分析の専門家です。以下のメールについてMCPツールを使って徹底的に調査し、ノートを作成・更新してください。
+
+=== 対象メール ===
+メールID: ${mail.id}
+${mail.conversationId ? `会話ID: ${mail.conversationId}` : ''}
+件名: ${mail.subject}
+差出人: ${mail.from?.displayName || mail.from?.address || '不明'}
+アカウント: ${mail.accountEmail}
+
+=== 調査手順 ===
+1. まず mcp__shirabe__get_note でメールID ${mail.id}${mail.conversationId ? ` (会話ID: ${mail.conversationId})` : ''} の既存ノートを確認
+2. mcp__shirabe__get_mail_detail でメールID ${mail.id} の本文を取得
+3. mcp__shirabe__get_mail_thread でスレッド全体を取得して文脈を把握
+4. mcp__shirabe__analyze_thread でスレッドのアクション項目・緊急度を分析
+5. 必要に応じて mcp__shirabe__search_mails で関連メールを検索
+6. mcp__shirabe__update_note で調査結果をノートに保存:
+   - mail_id: ${mail.id}
+   - content: 以下のマークダウン形式
+   - todos: 抽出したアクション項目
+   - tags: 判定カテゴリ (urgent/reply/action/info/unnecessary/hold)
+   ${mail.conversationId ? `- conversation_id: ${mail.conversationId}` : ''}
+
+=== ノートの出力形式（Markdown） ===
+## 案件概要
+このスレッドの概要を1-2文で。
+
+## 自分の役割
+${mail.accountEmail} が求められていること。
+
+## 現在のステータス
+- 誰のアクション待ちか
+- 未解決事項
+
+## 判定
+**【カテゴリ】** — 理由1文
+
+## アクション
+- [ ] 具体的なタスク（→自分 or →相手）
+
+## ⚠️ 期限
+- 期限があれば記載
+
+## メモ
+- 背景情報や注意点
+
+=== 重要 ===
+- 必ず最後に update_note でノートに保存すること
+- 既存ノートがある場合は replace_content: true で全体を置き換え
+- 最終的な分析結果をMarkdown形式で出力すること`;
+
+      const result = await window.electronAPI.runClaudeAnalysis(prompt, { mode: 'deep' });
+
+      // After deep analysis, MCP update_note may have written directly to the note file.
+      // Reload note from disk to get the latest state.
+      const reloaded = await window.electronAPI.getNote(noteId);
+      if (reloaded) {
+        setNote(reloaded);
+      } else if (result.status === 'done' && result.markdown) {
+        // Fallback: MCP didn't save, so save from result
+        const now = new Date().toISOString();
+        const threadCount = threadMessages?.length ?? 1;
+
+        let detectedLabel: QuickLabel | undefined;
+        const verdictMatch = result.markdown.match(/## 判定\s*\n\s*\*?\*?\s*【\s*(至急|要返信|要対応|情報|不要|保留)/);
+        if (verdictMatch) {
+          const labelMap: Record<string, QuickLabel> = {
+            '至急': 'action', '要返信': 'reply', '要対応': 'action', '情報': 'done', '不要': 'unnecessary', '保留': 'hold',
+          };
+          detectedLabel = labelMap[verdictMatch[1]];
+        }
+
+        if (note) {
+          const updated: MailNote = {
+            ...note,
+            content: result.markdown,
+            quickLabel: detectedLabel || note.quickLabel,
+            threadMessageCount: threadCount,
+            updatedAt: now,
+            history: [
+              ...note.history,
+              { timestamp: now, type: 'ai_proposal', content: `深層再生成（MCP）: ${result.markdown.slice(0, 80)}` },
+            ],
+          };
+          saveNote(updated);
+        } else {
+          const newNote: MailNote = {
+            id: noteId,
+            mailId: mail.id,
+            accountEmail: mail.accountEmail,
+            subject: mail.subject,
+            content: result.markdown,
+            todos: [],
+            quickLabel: detectedLabel,
+            threadMessageCount: threadCount,
+            history: [
+              { timestamp: now, type: 'created', content: 'ノート作成' },
+              { timestamp: now, type: 'ai_proposal', content: `深層再生成（MCP）: ${result.markdown.slice(0, 80)}` },
+            ],
+            createdAt: now,
+            updatedAt: now,
+          };
+          saveNote(newNote);
+        }
+      }
+    } finally {
+      setAiLoading(false);
+    }
+  }, [note, mail, apiKey, aiLoading, threadMessages, noteId, saveNote]);
+
+  // Regenerate: manual trigger uses deep analysis with MCP tools
+  const handleRegenerate = handleDeepRegenerate;
 
   // Auto-generate: create note if none exists, or update if thread has grown
   useEffect(() => {

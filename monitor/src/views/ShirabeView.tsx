@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRoutineProgress, ViewType } from '../types';
+import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRoutineProgress, MailNote, ViewType } from '../types';
+import { BUILTIN_TAGS } from '../types';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 interface ShirabeViewProps {
@@ -8,6 +9,17 @@ interface ShirabeViewProps {
 
 // Thesis data placeholder (populate from external config or API)
 const THESIS_DATA: ShirabeThesisStatus[] = [];
+
+// Tag color map for badges
+const TAG_COLOR_MAP: Record<string, { bg: string; text: string; border: string }> = {
+  amber:   { bg: 'bg-amber-500/15',   text: 'text-amber-400',   border: 'border-amber-500/30' },
+  orange:  { bg: 'bg-orange-500/15',  text: 'text-orange-400',  border: 'border-orange-500/30' },
+  violet:  { bg: 'bg-violet-500/15',  text: 'text-violet-400',  border: 'border-violet-500/30' },
+  emerald: { bg: 'bg-emerald-500/15', text: 'text-emerald-400', border: 'border-emerald-500/30' },
+  red:     { bg: 'bg-red-500/15',     text: 'text-red-400',     border: 'border-red-500/30' },
+  sky:     { bg: 'bg-sky-500/15',     text: 'text-sky-400',     border: 'border-sky-500/30' },
+  rose:    { bg: 'bg-rose-500/15',    text: 'text-rose-400',    border: 'border-rose-500/30' },
+};
 
 function formatDate(iso: string): string {
   const d = new Date(iso);
@@ -19,8 +31,73 @@ function formatWeekday(iso: string): string {
   return weekdays[new Date(iso).getDay()];
 }
 
+// Extract tag info
+function getTagInfo(tagId: string) {
+  const tag = BUILTIN_TAGS.find(t => t.id === tagId);
+  if (!tag) return null;
+  const colors = TAG_COLOR_MAP[tag.color] ?? { bg: 'bg-surface-600', text: 'text-surface-300', border: 'border-surface-500' };
+  return { ...tag, ...colors };
+}
+
+// Categorize notes by action priority
+interface NotesByAction {
+  urgent: MailNote[];    // 至急
+  reply: MailNote[];     // 要返信
+  action: MailNote[];    // 要対応
+  hold: MailNote[];      // 保留
+  info: MailNote[];      // 情報
+  done: MailNote[];      // 対応済
+  untagged: MailNote[];  // タグなし（コンテンツあり）
+}
+
+function categorizeNotes(notes: MailNote[]): NotesByAction {
+  const result: NotesByAction = { urgent: [], reply: [], action: [], hold: [], info: [], done: [], untagged: [] };
+  for (const note of notes) {
+    const tags = note.tags ?? (note.quickLabel ? [note.quickLabel] : []);
+    if (tags.includes('urgent')) result.urgent.push(note);
+    else if (tags.includes('reply')) result.reply.push(note);
+    else if (tags.includes('action')) result.action.push(note);
+    else if (tags.includes('hold')) result.hold.push(note);
+    else if (tags.includes('info')) result.info.push(note);
+    else if (tags.includes('done') || tags.includes('unnecessary')) result.done.push(note);
+    else if (note.content) result.untagged.push(note);
+  }
+  return result;
+}
+
+// Extract deadlines from note content
+interface DeadlineItem {
+  subject: string;
+  deadline: string;
+  noteId: string;
+}
+
+function extractDeadlines(notes: MailNote[]): DeadlineItem[] {
+  const deadlines: DeadlineItem[] = [];
+  for (const note of notes) {
+    if (!note.content) continue;
+    // Look for ⚠️ 期限 section and extract lines
+    const deadlineMatch = note.content.match(/## ⚠️\s*期限\s*\n([\s\S]*?)(?=\n##|\n*$)/);
+    if (deadlineMatch) {
+      const lines = deadlineMatch[1].split('\n').filter(l => l.trim().startsWith('-'));
+      for (const line of lines) {
+        const text = line.replace(/^[-*]\s*(\[[ x]\]\s*)?/, '').trim();
+        if (text && !text.includes('なし') && !text.includes('省略')) {
+          deadlines.push({
+            subject: note.subject,
+            deadline: text,
+            noteId: note.id,
+          });
+        }
+      }
+    }
+  }
+  return deadlines;
+}
+
 export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
   const [digest, setDigest] = useState<ShirabeDigest | null>(null);
+  const [notes, setNotes] = useState<MailNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -32,39 +109,31 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
 
       const accounts = await api.getAccounts();
 
-      // Get tasks for all accounts
+      // Load notes and other data in parallel
+      const [allNotes, ...accountResults] = await Promise.all([
+        api.getNotes() as Promise<MailNote[]>,
+        ...accounts.flatMap(acc => [
+          api.getTasks(acc.email).catch(() => []),
+          api.getEvents(acc.email, 7).catch(() => []),
+          api.getMails(acc.email, 3).catch(() => []),
+        ]),
+      ]);
+
+      setNotes(allNotes);
+
+      // Reassemble results from flat array
       let tasks: Awaited<ReturnType<typeof api.getTasks>> = [];
-      for (const acc of accounts) {
-        try {
-          const accTasks = await api.getTasks(acc.email);
-          tasks = tasks.concat(accTasks);
-        } catch {
-          // skip accounts without tasks
-        }
-      }
-
-      // Get events for the next 7 days
       let events: Awaited<ReturnType<typeof api.getEvents>> = [];
-      for (const acc of accounts) {
-        try {
-          const accEvents = await api.getEvents(acc.email, 7);
-          events = events.concat(accEvents);
-        } catch {
-          // skip accounts without calendar
-        }
-      }
-      events.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
-
-      // Get unread mails (last 3 days)
       let unreadMails: Awaited<ReturnType<typeof api.getMails>> = [];
-      for (const acc of accounts) {
-        try {
-          const mails = await api.getMails(acc.email, 3);
-          unreadMails = unreadMails.concat(mails);
-        } catch {
-          // skip
-        }
+
+      for (let i = 0; i < accounts.length; i++) {
+        const base = i * 3;
+        tasks = tasks.concat(accountResults[base] as typeof tasks);
+        events = events.concat(accountResults[base + 1] as typeof events);
+        unreadMails = unreadMails.concat(accountResults[base + 2] as typeof unreadMails);
       }
+
+      events.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
       unreadMails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
       // Build urgent items from unread mails (top 5)
@@ -149,6 +218,12 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
 
   if (!digest) return null;
 
+  const categorized = categorizeNotes(notes);
+  const deadlines = extractDeadlines(notes);
+  const actionableCount = categorized.urgent.length + categorized.reply.length + categorized.action.length;
+  const totalNotes = notes.filter(n => n.content).length;
+
+  const hasThesisData = digest.thesis.length > 0;
   const thesisD = digest.thesis.filter((t) => t.category === 'D');
   const thesisM = digest.thesis.filter((t) => t.category === 'M');
   const thesisB = digest.thesis.filter((t) => t.category === 'B');
@@ -178,26 +253,63 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
         </button>
       </div>
 
+      {/* Summary stats bar */}
+      <div className="flex gap-3 mb-4">
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-900 rounded-lg border border-surface-700/50">
+          <span className="w-2 h-2 rounded-full bg-red-500" />
+          <span className="text-xs text-surface-400">要対応</span>
+          <span className="text-sm font-medium text-surface-100">{actionableCount}</span>
+        </div>
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-900 rounded-lg border border-surface-700/50">
+          <span className="w-2 h-2 rounded-full bg-amber-500" />
+          <span className="text-xs text-surface-400">期限</span>
+          <span className="text-sm font-medium text-surface-100">{deadlines.length}</span>
+        </div>
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-900 rounded-lg border border-surface-700/50">
+          <span className="w-2 h-2 rounded-full bg-blue-500" />
+          <span className="text-xs text-surface-400">予定</span>
+          <span className="text-sm font-medium text-surface-100">{digest.weekEvents.length}</span>
+        </div>
+        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-900 rounded-lg border border-surface-700/50">
+          <span className="w-2 h-2 rounded-full bg-surface-500" />
+          <span className="text-xs text-surface-400">分析済</span>
+          <span className="text-sm font-medium text-surface-100">{totalNotes}</span>
+        </div>
+      </div>
+
       {/* Grid layout */}
       <div className="grid grid-cols-2 gap-4">
-        {/* Urgent items */}
+        {/* Action required notes (from tags) */}
         <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
           <h2 className="text-sm font-medium text-red-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-red-500" />
-            緊急 ({digest.urgent.length})
+            対応が必要 ({actionableCount})
           </h2>
-          {digest.urgent.length === 0 ? (
-            <p className="text-sm text-surface-500">緊急項目なし</p>
+          {actionableCount === 0 ? (
+            <p className="text-sm text-surface-500">対応が必要なメールはありません</p>
           ) : (
-            <ul className="space-y-2">
-              {digest.urgent.map((item, i) => (
-                <li key={i} className="text-sm text-surface-300 flex items-start gap-2">
-                  <span className="text-red-400 mt-0.5 flex-shrink-0">
-                    {item.source === 'mail' ? '!' : item.source === 'task' ? '!' : '!'}
-                  </span>
-                  <span className="line-clamp-2">{item.label}</span>
-                </li>
-              ))}
+            <ul className="space-y-1.5">
+              {/* Urgent first, then reply, then action */}
+              {[...categorized.urgent, ...categorized.reply, ...categorized.action].slice(0, 8).map((note, i) => {
+                const tags = note.tags ?? (note.quickLabel ? [note.quickLabel] : []);
+                const primaryTag = tags[0];
+                const tagInfo = primaryTag ? getTagInfo(primaryTag) : null;
+                return (
+                  <li key={i} className="flex items-start gap-2 text-sm">
+                    {tagInfo ? (
+                      <span className={`text-[9px] px-1.5 py-px rounded border flex-shrink-0 mt-0.5 ${tagInfo.bg} ${tagInfo.text} ${tagInfo.border}`}>
+                        {tagInfo.label}
+                      </span>
+                    ) : (
+                      <span className="text-red-400 mt-0.5 flex-shrink-0">!</span>
+                    )}
+                    <span className="text-surface-300 line-clamp-1">{note.subject}</span>
+                  </li>
+                );
+              })}
+              {actionableCount > 8 && (
+                <li className="text-xs text-surface-500 pl-1">...他 {actionableCount - 8} 件</li>
+              )}
             </ul>
           )}
           <button
@@ -236,93 +348,167 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           </button>
         </section>
 
-        {/* Thesis status */}
+        {/* Deadlines (extracted from notes) */}
         <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
           <h2 className="text-sm font-medium text-amber-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-amber-500" />
-            学位審査
+            期限・締切 ({deadlines.length})
           </h2>
-          <div className="space-y-3">
-            {/* Doctoral */}
-            <div>
-              <h3 className="text-xs text-surface-500 mb-1">博士 (D)</h3>
-              {thesisD.map((t, i) => (
-                <div key={i} className="flex items-center justify-between text-sm py-0.5">
-                  <span className={`text-surface-300 ${t.phase.includes('完了') ? 'line-through text-surface-500' : ''}`}>
-                    {t.student}
-                  </span>
-                  <span className={`text-xs ${t.phase.includes('完了') ? 'text-emerald-400' : 'text-amber-400'}`}>
-                    {t.phase.includes('完了') ? '完了' : t.phase}
-                  </span>
-                </div>
+          {deadlines.length === 0 ? (
+            <p className="text-sm text-surface-500">抽出された期限なし</p>
+          ) : (
+            <ul className="space-y-2">
+              {deadlines.slice(0, 6).map((dl, i) => (
+                <li key={i} className="text-sm">
+                  <div className="text-surface-300 line-clamp-1">{dl.deadline}</div>
+                  <div className="text-[10px] text-surface-500 mt-0.5 line-clamp-1">{dl.subject}</div>
+                </li>
               ))}
-            </div>
-            {/* Master's */}
-            <div>
-              <h3 className="text-xs text-surface-500 mb-1">修士 (M)</h3>
-              {thesisM.map((t, i) => (
-                <div key={i} className="flex items-center justify-between text-sm py-0.5">
-                  <span className="text-surface-300">{t.student}</span>
-                  <span className="text-xs text-amber-400">{t.phase}</span>
-                </div>
-              ))}
-            </div>
-            {/* Bachelor's */}
-            <div>
-              <h3 className="text-xs text-surface-500 mb-1">学士 (B)</h3>
-              {thesisB.map((t, i) => (
-                <div key={i} className="flex items-center justify-between text-sm py-0.5">
-                  <span className="text-surface-300">{t.student}</span>
-                  <span className="text-xs text-blue-400">{t.phase}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+              {deadlines.length > 6 && (
+                <li className="text-xs text-surface-500">...他 {deadlines.length - 6} 件</li>
+              )}
+            </ul>
+          )}
+          <button
+            onClick={() => onNavigate('mail')}
+            className="mt-3 text-xs text-accent-400 hover:text-accent-300"
+          >
+            メール確認 →
+          </button>
         </section>
 
-        {/* Routine progress */}
+        {/* Unread mails */}
+        <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
+          <h2 className="text-sm font-medium text-sky-400 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-sky-500" />
+            未読メール ({digest.urgent.filter(u => u.source === 'mail').length})
+          </h2>
+          {digest.urgent.filter(u => u.source === 'mail').length === 0 ? (
+            <p className="text-sm text-surface-500">未読メールなし</p>
+          ) : (
+            <ul className="space-y-1.5">
+              {digest.urgent.filter(u => u.source === 'mail').map((item, i) => (
+                <li key={i} className="text-sm text-surface-300 line-clamp-1">
+                  {item.label}
+                </li>
+              ))}
+            </ul>
+          )}
+          <button
+            onClick={() => onNavigate('mail')}
+            className="mt-3 text-xs text-accent-400 hover:text-accent-300"
+          >
+            メール一覧 →
+          </button>
+        </section>
+
+        {/* Note analysis summary */}
         <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
           <h2 className="text-sm font-medium text-emerald-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
-            ルーティン ({digest.routine.month}月)
+            分析ノート概況
           </h2>
-          <div className="mb-3">
-            <div className="flex items-center justify-between text-sm mb-1">
-              <span className="text-surface-400">進捗</span>
-              <span className="text-surface-300">
-                {digest.routine.total > 0
-                  ? `${digest.routine.completed}/${digest.routine.total} 完了`
-                  : 'データ読み込み中...'}
-              </span>
-            </div>
-            {digest.routine.total > 0 && (
-              <div className="w-full bg-surface-800 rounded-full h-2">
-                <div
-                  className="bg-emerald-500 h-2 rounded-full transition-all"
-                  style={{
-                    width: `${Math.round((digest.routine.completed / digest.routine.total) * 100)}%`,
-                  }}
-                />
+          <div className="space-y-1.5">
+            {(['urgent', 'reply', 'action', 'hold', 'info', 'done'] as const).map(key => {
+              const list = categorized[key];
+              if (list.length === 0) return null;
+              const tagInfo = getTagInfo(key);
+              if (!tagInfo) return null;
+              return (
+                <div key={key} className="flex items-center justify-between text-sm">
+                  <span className={`text-[10px] px-1.5 py-px rounded border ${tagInfo.bg} ${tagInfo.text} ${tagInfo.border}`}>
+                    {tagInfo.label}
+                  </span>
+                  <span className="text-surface-300 font-mono text-xs">{list.length} 件</span>
+                </div>
+              );
+            })}
+            {categorized.untagged.length > 0 && (
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[10px] px-1.5 py-px rounded border bg-surface-700 text-surface-400 border-surface-600">
+                  未分類
+                </span>
+                <span className="text-surface-300 font-mono text-xs">{categorized.untagged.length} 件</span>
               </div>
             )}
           </div>
-          {digest.routine.pending.length > 0 && (
-            <div>
-              <h3 className="text-xs text-surface-500 mb-1">未完了</h3>
-              <ul className="space-y-0.5">
-                {digest.routine.pending.slice(0, 5).map((item, i) => (
-                  <li key={i} className="text-sm text-surface-400">
-                    - {item}
+          {totalNotes === 0 && (
+            <p className="text-sm text-surface-500 mt-2">ノートなし（メール画面で分析を開始）</p>
+          )}
+        </section>
+
+        {/* 校務 (Administrative duties including thesis reviews) */}
+        <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
+          <h2 className="text-sm font-medium text-violet-400 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-violet-500" />
+            校務
+          </h2>
+
+          {/* Thesis sub-section */}
+          {hasThesisData && (
+            <div className="mb-3">
+              <h3 className="text-xs text-surface-500 mb-1.5 font-medium">学位審査</h3>
+              <div className="space-y-2 pl-1">
+                {thesisD.length > 0 && (
+                  <div>
+                    <h4 className="text-[10px] text-surface-500 mb-0.5">博士 (D)</h4>
+                    {thesisD.map((t, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm py-0.5">
+                        <span className={`text-surface-300 ${t.phase.includes('完了') ? 'line-through text-surface-500' : ''}`}>
+                          {t.student}
+                        </span>
+                        <span className={`text-xs ${t.phase.includes('完了') ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {t.phase.includes('完了') ? '完了' : t.phase}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {thesisM.length > 0 && (
+                  <div>
+                    <h4 className="text-[10px] text-surface-500 mb-0.5">修士 (M)</h4>
+                    {thesisM.map((t, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm py-0.5">
+                        <span className="text-surface-300">{t.student}</span>
+                        <span className="text-xs text-amber-400">{t.phase}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {thesisB.length > 0 && (
+                  <div>
+                    <h4 className="text-[10px] text-surface-500 mb-0.5">学士 (B)</h4>
+                    {thesisB.map((t, i) => (
+                      <div key={i} className="flex items-center justify-between text-sm py-0.5">
+                        <span className="text-surface-300">{t.student}</span>
+                        <span className="text-xs text-blue-400">{t.phase}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Overdue tasks from eM Client */}
+          {digest.urgent.filter(u => u.source === 'task').length > 0 && (
+            <div className="mb-3">
+              <h3 className="text-xs text-surface-500 mb-1.5 font-medium">期限超過タスク</h3>
+              <ul className="space-y-1 pl-1">
+                {digest.urgent.filter(u => u.source === 'task').map((item, i) => (
+                  <li key={i} className="text-sm text-red-400 line-clamp-1">
+                    {item.label}
                   </li>
                 ))}
-                {digest.routine.pending.length > 5 && (
-                  <li className="text-xs text-surface-500">
-                    ...他 {digest.routine.pending.length - 5} 件
-                  </li>
-                )}
               </ul>
             </div>
           )}
+
+          {/* Placeholder for future items */}
+          {!hasThesisData && digest.urgent.filter(u => u.source === 'task').length === 0 && (
+            <p className="text-sm text-surface-500">校務データなし</p>
+          )}
+
           <button
             onClick={() => {
               window.electronAPI.ptyCreate().then(() => {
@@ -332,7 +518,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
             }}
             className="mt-3 text-xs text-accent-400 hover:text-accent-300"
           >
-            詳細チェック →
+            ルーティンチェック →
           </button>
         </section>
       </div>
