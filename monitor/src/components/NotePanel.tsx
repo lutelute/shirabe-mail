@@ -425,7 +425,7 @@ export default function NotePanel({ mail, apiKey, threadMessages }: NotePanelPro
 
   // AI: Update note (re-analyze with existing note context)
   const handleAiUpdate = useCallback(async () => {
-    if (!note || !apiKey || aiLoading) return;
+    if (!note || aiLoading) return;
     setAiLoading(true);
     try {
       const prompt = `以下のメールを分析して、既存ノートを更新してください。
@@ -474,11 +474,11 @@ ${note.content || '(空)'}
     } finally {
       setAiLoading(false);
     }
-  }, [note, mail, apiKey, aiLoading, saveNote]);
+  }, [note, mail, aiLoading, saveNote]);
 
   // AI: Reconsider (fresh analysis ignoring existing note)
   const handleAiReconsider = useCallback(async () => {
-    if (!note || !apiKey || aiLoading) return;
+    if (!note || aiLoading) return;
     setAiLoading(true);
     try {
       const prompt = `以下のメールを白紙から分析してください。
@@ -527,11 +527,11 @@ ${note.content || '(空)'}
     } finally {
       setAiLoading(false);
     }
-  }, [note, mail, apiKey, aiLoading, saveNote]);
+  }, [note, mail, aiLoading, saveNote]);
 
   // Shared: generate or update note with AI analysis
   const generateOrUpdateNote = useCallback(async () => {
-    if (!apiKey || aiLoading) return;
+    if (aiLoading) return;
     setAiLoading(true);
     try {
       // Build thread context (cap each message to 3000 chars, total thread to 30000 chars)
@@ -660,11 +660,11 @@ ${existingNoteSection}
     } finally {
       setAiLoading(false);
     }
-  }, [note, mail, apiKey, aiLoading, threadMessages, noteId, saveNote]);
+  }, [note, mail, aiLoading, threadMessages, noteId, saveNote]);
 
   // AI: Deep regeneration (MCP tools for thorough analysis + note save)
   const handleDeepRegenerate = useCallback(async () => {
-    if (!apiKey || aiLoading) return;
+    if (aiLoading) return;
     setAiLoading(true);
     try {
       const prompt = `あなたはメール分析の専門家です。以下のメールについてMCPツールを使って徹底的に調査し、ノートを作成・更新してください。
@@ -774,14 +774,14 @@ ${mail.accountEmail} が求められていること。
     } finally {
       setAiLoading(false);
     }
-  }, [note, mail, apiKey, aiLoading, threadMessages, noteId, saveNote]);
+  }, [note, mail, aiLoading, threadMessages, noteId, saveNote]);
 
   // Regenerate: manual trigger uses deep analysis with MCP tools
   const handleRegenerate = handleDeepRegenerate;
 
   // Auto-generate: create note if none exists, or update if thread has grown
   useEffect(() => {
-    if (!apiKey || aiLoading || loading) return;
+    if (aiLoading || loading) return;
 
     const shouldGenerate = !note;
     const shouldUpdate = note && threadMessages && threadMessages.length > 0
@@ -795,7 +795,7 @@ ${mail.accountEmail} が求められていること。
 
     return () => clearTimeout(timer);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note, loading, noteId, threadMessages?.length, apiKey]);
+  }, [note, loading, noteId, threadMessages?.length]);
 
   // Delete note
   const handleDelete = useCallback(async () => {
@@ -834,9 +834,9 @@ ${mail.accountEmail} が求められていること。
           <span className="text-surface-500 text-[9px]">|</span>
           <button
             onClick={handleRegenerate}
-            disabled={aiLoading || !apiKey}
+            disabled={aiLoading}
             className="px-1.5 py-px text-[9px] bg-emerald-600/80 hover:bg-emerald-500 text-white rounded transition-colors disabled:opacity-40"
-            title={!apiKey ? 'APIキー未設定' : 'スレッド全文から深い分析でノート生成'}
+            title="スレッド全文から深い分析でノート生成"
           >
             {aiLoading ? '分析中...' : '再生成'}
           </button>
@@ -878,25 +878,25 @@ ${mail.accountEmail} が求められていること。
         {/* AI buttons */}
         <button
           onClick={handleRegenerate}
-          disabled={aiLoading || !apiKey}
+          disabled={aiLoading}
           className="px-1.5 py-px text-[9px] bg-emerald-600/80 hover:bg-emerald-500 text-white rounded transition-colors disabled:opacity-40"
-          title={!apiKey ? 'APIキー未設定' : 'スレッド全文から深い分析で再生成'}
+          title="スレッド全文から深い分析で再生成"
         >
           {aiLoading ? '分析中...' : '再生成'}
         </button>
         <button
           onClick={handleAiUpdate}
-          disabled={aiLoading || !apiKey}
+          disabled={aiLoading}
           className="px-1.5 py-px text-[9px] bg-purple-600/80 hover:bg-purple-500 text-white rounded transition-colors disabled:opacity-40"
-          title={!apiKey ? 'APIキー未設定' : '既存ノートを元にAI更新'}
+          title="既存ノートを元にAI更新"
         >
           {aiLoading ? '分析中...' : '更新'}
         </button>
         <button
           onClick={handleAiReconsider}
-          disabled={aiLoading || !apiKey}
+          disabled={aiLoading}
           className="px-1.5 py-px text-[9px] bg-indigo-600/80 hover:bg-indigo-500 text-white rounded transition-colors disabled:opacity-40"
-          title={!apiKey ? 'APIキー未設定' : 'メールを再分析（白紙から）'}
+          title="メールを再分析（白紙から）"
         >
           再検討
         </button>
