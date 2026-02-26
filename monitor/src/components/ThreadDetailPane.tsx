@@ -4,6 +4,7 @@ import { isSpamFolder } from '../hooks/useMailData';
 import { formatDate } from '../utils/date';
 import EmptyState from './shared/EmptyState';
 import NotePanel from './NotePanel';
+import { openInEmClient } from '../utils/openInEmClient';
 
 // ─── Sender category & color ──────────────────────────────
 type SenderCategory = 'university' | 'research' | 'admin' | 'other';
@@ -291,7 +292,7 @@ export default function ThreadDetailPane({
             <button
               onClick={() => {
                 if (selectedMail) {
-                  window.electronAPI.openMailInEmClient({
+                  openInEmClient({
                     subject: selectedMail.subject,
                     fromAddress: selectedMail.from?.address,
                   });

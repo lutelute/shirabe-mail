@@ -171,6 +171,14 @@ const SENT_FOLDER_NAMES = [
   '送信済み',
 ];
 
+/**
+ * Open eM Client DB for reading.
+ *
+ * Strategy:
+ * 1. Readonly on original — reads WAL data natively via shared lock
+ * 2. VACUUM INTO — atomic snapshot (no race condition)
+ * 3. File copy fallback — copies DB + WAL + SHM to temp (last resort)
+ */
 function copyAndOpenDb(
   accountUid: string,
   subdir: string,
@@ -180,18 +188,40 @@ function copyAndOpenDb(
   if (!fs.existsSync(srcPath)) {
     throw new Error(`DB not found: ${srcPath}`);
   }
+
+  // Strategy 1: Readonly on original
+  try {
+    return new Database(srcPath, { readonly: true, fileMustExist: true });
+  } catch { /* exclusive lock — try snapshot */ }
+
   const tmpDir = path.join(TMP_BASE, accountUid);
   fs.mkdirSync(tmpDir, { recursive: true });
   const destFile = path.join(tmpDir, dbName);
-  fs.copyFileSync(srcPath, destFile);
 
+  // Clean stale snapshot
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { fs.unlinkSync(destFile + suffix); } catch { /* noop */ }
+  }
+
+  // Strategy 2: VACUUM INTO — atomic, consistent
+  try {
+    const srcDb = new Database(srcPath, { readonly: true, fileMustExist: true });
+    try {
+      srcDb.exec(`VACUUM INTO '${destFile.replace(/'/g, "''")}'`);
+    } finally {
+      srcDb.close();
+    }
+    return new Database(destFile, { readonly: true, fileMustExist: true });
+  } catch { /* VACUUM INTO may fail if locked */ }
+
+  // Strategy 3: File copy fallback
+  fs.copyFileSync(srcPath, destFile);
   for (const suffix of ['-wal', '-shm']) {
     const walSrc = srcPath + suffix;
     if (fs.existsSync(walSrc)) {
       fs.copyFileSync(walSrc, destFile + suffix);
     }
   }
-
   return new Database(destFile, { readonly: true, fileMustExist: true });
 }
 
@@ -1855,51 +1885,30 @@ JSON以外の説明は不要です。`;
     await shell.openExternal(mailto);
   });
 
-  // Open a specific mail in eM Client via AppleScript search
+  // Open a specific mail in eM Client — copy subject to clipboard & activate
   ipcMain.handle('openMailInEmClient', async (_event, params: {
     subject: string;
     fromAddress?: string;
-  }): Promise<{ success: boolean; error?: string }> => {
+  }): Promise<{ success: boolean; error?: string; clipboardCopied?: boolean }> => {
     try {
-      // Write search query to temp file (avoids all escaping issues with Japanese/special chars)
+      // Copy subject to clipboard via pbcopy (no permissions needed)
+      const { execSync: execSyncLocal } = require('child_process');
       const tmpQuery = path.join(os.tmpdir(), 'shirabe-search-query.txt');
       fs.writeFileSync(tmpQuery, params.subject, 'utf-8');
+      execSyncLocal(`cat "${tmpQuery}" | pbcopy`, { timeout: 3000 });
+      try { fs.unlinkSync(tmpQuery); } catch { /* noop */ }
 
-      const script = [
-        `set queryText to (read POSIX file "${tmpQuery}" as «class utf8»)`,
-        'set the clipboard to queryText',
-        'tell application "eM Client"',
-        '    activate',
-        '    go to Mail',
-        'end tell',
-        'delay 0.4',
-        'tell application "System Events"',
-        '    tell process "eM Client"',
-        '        keystroke "e" using {command down}',
-        '        delay 0.2',
-        '        keystroke "a" using {command down}',
-        '        delay 0.1',
-        '        keystroke "v" using {command down}',
-        '        delay 0.1',
-        '        key code 36',
-        '    end tell',
-        'end tell',
-      ].join('\n');
-
-      const tmpScript = path.join(os.tmpdir(), 'shirabe-emclient-open.scpt');
-      fs.writeFileSync(tmpScript, script, 'utf-8');
-      execSync(`osascript "${tmpScript}"`, { timeout: 10000 });
-      try { fs.unlinkSync(tmpScript); fs.unlinkSync(tmpQuery); } catch { /* noop */ }
-
-      return { success: true };
-    } catch (err) {
-      // Fallback: just open eM Client
+      // Activate eM Client
       try {
-        await shell.openExternal('emclient://');
-        return { success: true };
+        execSyncLocal('open -a "eM Client"', { timeout: 5000 });
       } catch {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
+        // Fallback: try AppleScript activate
+        execSyncLocal('osascript -e \'tell application "eM Client" to activate\'', { timeout: 5000 });
       }
+
+      return { success: true, clipboardCopied: true };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
   });
 }

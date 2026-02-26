@@ -14,6 +14,7 @@ import type {
 import { MAIL_COLUMN_OPTIONS, BUILTIN_TAGS } from '../types';
 import { formatDate } from '../utils/date';
 import { getSenderColor, getSenderBgStyle } from '../utils/mailColors';
+import { openInEmClient } from '../utils/openInEmClient';
 
 // ─── Tag color map (Tailwind-safe static classes) ────────
 const TAG_COLOR_MAP: Record<string, { bg: string; text: string }> = {
@@ -564,7 +565,7 @@ export default function MailTable({
               <div
                 onClick={() => handleRowClick(mail)}
                 onDoubleClick={() => {
-                  window.electronAPI.openMailInEmClient({
+                  openInEmClient({
                     subject: mail.subject,
                     fromAddress: mail.from?.address,
                   });

@@ -3,6 +3,7 @@ import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRout
 import { BUILTIN_TAGS } from '../types';
 import { useNoteService } from '../context/NoteServiceContext';
 import { isObviousSpam } from '../utils/spamFilter';
+import { openInEmClient } from '../utils/openInEmClient';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 interface ShirabeViewProps {
@@ -316,7 +317,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
                     key={i}
                     className="flex items-start gap-2 text-sm cursor-pointer hover:bg-surface-800/50 rounded px-1 py-0.5 -mx-1 transition-colors"
                     onClick={() => {
-                      window.electronAPI.openMailInEmClient({
+                      openInEmClient({
                         subject: note.subject,
                       });
                     }}
@@ -421,7 +422,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
                   onClick={() => {
                     // Extract subject from label (format: "subject — sender")
                     const subject = item.label.split(' — ')[0];
-                    window.electronAPI.openMailInEmClient({ subject });
+                    openInEmClient({ subject });
                   }}
                   title="クリックでeM Clientで開く"
                 >

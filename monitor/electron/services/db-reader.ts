@@ -80,11 +80,12 @@ function findAccount(email: string): AccountConfig {
  *
  * Strategy:
  * 1. Readonly mode — best: reads WAL data natively via shared lock
- * 2. Copy fallback — copies DB + WAL + SHM to temp, reads from snapshot
- * 3. Immutable last resort — reads stale main DB only (no WAL)
+ * 2. VACUUM INTO — atomic snapshot that includes WAL data (no race condition)
+ * 3. Copy fallback — copies DB + WAL + SHM to temp (last resort, has race risk)
  *
- * The copy fallback is needed when eM Client holds an exclusive WAL lock
- * that prevents shared readonly access.
+ * The old approach (Strategy 3 only) had a race condition: if eM Client
+ * wrote between copying the main DB and WAL files, queries would return
+ * inconsistent data (e.g., wrong mail body for a given mail ID).
  */
 const TMP_DIR = path.join(os.tmpdir(), 'shirabe-snap');
 
@@ -98,39 +99,50 @@ function openDb(
     throw new Error(`DB not found: ${srcPath}`);
   }
 
-  // 1. Primary: open directly in readonly mode
+  // Strategy 1: Readonly on original — includes WAL, no copy needed
   try {
     return new Database(srcPath, { readonly: true, fileMustExist: true });
   } catch (err1) {
     console.warn(`[db-reader] readonly open failed for ${dbName}:`, (err1 as Error).message);
   }
 
-  // 2. Fallback: snapshot copy (DB + WAL + SHM)
-  try {
-    fs.mkdirSync(TMP_DIR, { recursive: true });
-    const safeName = accountUid.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const tmpPath = path.join(TMP_DIR, `${safeName}_${dbName}`);
+  const safeName = accountUid.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const tmpPath = path.join(TMP_DIR, `${safeName}_${dbName}`);
+  fs.mkdirSync(TMP_DIR, { recursive: true });
 
-    fs.copyFileSync(srcPath, tmpPath);
-    const walSrc = srcPath + '-wal';
-    const shmSrc = srcPath + '-shm';
-    if (fs.existsSync(walSrc)) {
-      fs.copyFileSync(walSrc, tmpPath + '-wal');
-    } else {
-      try { fs.unlinkSync(tmpPath + '-wal'); } catch { /* noop */ }
-    }
-    if (fs.existsSync(shmSrc)) {
-      fs.copyFileSync(shmSrc, tmpPath + '-shm');
-    } else {
-      try { fs.unlinkSync(tmpPath + '-shm'); } catch { /* noop */ }
-    }
-
-    return new Database(tmpPath, { fileMustExist: true });
-  } catch (err2) {
-    console.warn(`[db-reader] copy fallback failed for ${dbName}:`, (err2 as Error).message);
+  // Clean stale snapshot
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { fs.unlinkSync(tmpPath + suffix); } catch { /* noop */ }
   }
 
-  // 3. Last resort: immutable (stale — ignores WAL)
+  // Strategy 2: VACUUM INTO — atomic, consistent snapshot
+  try {
+    const srcDb = new Database(srcPath, { readonly: true, fileMustExist: true });
+    try {
+      srcDb.exec(`VACUUM INTO '${tmpPath.replace(/'/g, "''")}'`);
+    } finally {
+      srcDb.close();
+    }
+    return new Database(tmpPath, { readonly: true, fileMustExist: true });
+  } catch (err2) {
+    console.warn(`[db-reader] VACUUM INTO failed for ${dbName}:`, (err2 as Error).message);
+  }
+
+  // Strategy 3: File copy fallback (old behavior, has race risk)
+  try {
+    fs.copyFileSync(srcPath, tmpPath);
+    for (const suffix of ['-wal', '-shm']) {
+      const walSrc = srcPath + suffix;
+      if (fs.existsSync(walSrc)) {
+        fs.copyFileSync(walSrc, tmpPath + suffix);
+      }
+    }
+    return new Database(tmpPath, { readonly: true, fileMustExist: true });
+  } catch (err3) {
+    console.warn(`[db-reader] copy fallback failed for ${dbName}:`, (err3 as Error).message);
+  }
+
+  // Last resort: immutable (stale — ignores WAL)
   console.warn(`[db-reader] using immutable mode for ${dbName} (data may be stale)`);
   const uri = `file:${srcPath}?immutable=1`;
   return new Database(uri, { readonly: true, fileMustExist: true });
