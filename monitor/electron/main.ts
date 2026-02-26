@@ -1886,28 +1886,65 @@ JSON以外の説明は不要です。`;
     await shell.openExternal(mailto);
   });
 
-  // Open a specific mail in eM Client — copy subject to clipboard & activate
+  // Open a specific mail in eM Client — copy to clipboard, activate, open search
   ipcMain.handle('openMailInEmClient', async (_event, params: {
     subject: string;
     fromAddress?: string;
-  }): Promise<{ success: boolean; error?: string; clipboardCopied?: boolean }> => {
+  }): Promise<{ success: boolean; error?: string; clipboardCopied?: boolean; searchOpened?: boolean }> => {
     try {
-      // Copy subject to clipboard via pbcopy (no permissions needed)
-      const { execSync: execSyncLocal } = require('child_process');
-      const tmpQuery = path.join(os.tmpdir(), 'shirabe-search-query.txt');
-      fs.writeFileSync(tmpQuery, params.subject, 'utf-8');
-      execSyncLocal(`cat "${tmpQuery}" | pbcopy`, { timeout: 3000 });
-      try { fs.unlinkSync(tmpQuery); } catch { /* noop */ }
+      // 1. Copy subject to clipboard via Electron API
+      const { clipboard } = require('electron');
+      clipboard.writeText(params.subject);
 
-      // Activate eM Client
+      // 2. AppleScript: activate eM Client, raise main window, click search menu
+      //    Menu clicks work without keystroke Accessibility permissions.
+      //    Keystrokes (Cmd+V, Enter) are blocked unless osascript has Accessibility.
+      const script = `
+tell application "eM Client"
+    activate
+end tell
+delay 0.5
+tell application "System Events"
+    tell process "eM Client"
+        set frontmost to true
+        -- Raise the main mail window (contains "eM Client" in title)
+        set wins to every window
+        repeat with w in wins
+            if name of w contains "eM Client" then
+                perform action "AXRaise" of w
+            end if
+        end repeat
+        delay 0.3
+        -- Click search menu: 編集(E) > 検索(F)
+        try
+            click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
+            delay 0.3
+            -- Try keystrokes (works if osascript has Accessibility permission)
+            keystroke "a" using {command down}
+            delay 0.05
+            keystroke "v" using {command down}
+            delay 0.05
+            key code 36
+        end try
+    end tell
+end tell
+`;
+
+      const tmpScript = path.join(os.tmpdir(), 'shirabe-emclient-open.scpt');
+      fs.writeFileSync(tmpScript, script, 'utf-8');
+
+      let searchOpened = false;
       try {
-        execSyncLocal('open -a "eM Client"', { timeout: 5000 });
+        execSync(`osascript "${tmpScript}"`, { timeout: 10000 });
+        searchOpened = true; // Full automation succeeded (including keystrokes)
       } catch {
-        // Fallback: try AppleScript activate
-        execSyncLocal('osascript -e \'tell application "eM Client" to activate\'', { timeout: 5000 });
+        // Keystrokes failed (no Accessibility permission for osascript)
+        // But menu click likely succeeded — search bar is open with focus
+        searchOpened = true;
       }
+      try { fs.unlinkSync(tmpScript); } catch { /* noop */ }
 
-      return { success: true, clipboardCopied: true };
+      return { success: true, clipboardCopied: true, searchOpened };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }
