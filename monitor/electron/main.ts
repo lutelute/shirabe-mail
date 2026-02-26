@@ -1591,10 +1591,13 @@ Markdown形式で以下のセクションを含める。メールごとに判定
       try { fs.unlinkSync(destPath); } catch { /* */ }
 
       // Phase: restarting
-      sendInstallProgress('restarting', 98, '再起動中...');
+      sendInstallProgress('restarting', 100, '再起動中...');
 
-      spawn('open', [destApp], { detached: true, stdio: 'ignore' }).unref();
-      setTimeout(() => app.quit(), 500);
+      // Relaunch the new version from /Applications
+      setTimeout(() => {
+        spawn('open', ['-n', destApp], { detached: true, stdio: 'ignore' }).unref();
+        setTimeout(() => app.exit(0), 1000);
+      }, 500);
 
       return { success: true, path: destApp };
     } catch (err) {
