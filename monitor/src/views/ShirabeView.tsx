@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRoutineProgress, MailNote, ViewType } from '../types';
+import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRoutineProgress, MailNote, MailItem, ViewType } from '../types';
 import { BUILTIN_TAGS } from '../types';
+import { useNoteService } from '../context/NoteServiceContext';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 
 interface ShirabeViewProps {
@@ -98,8 +99,10 @@ function extractDeadlines(notes: MailNote[]): DeadlineItem[] {
 export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
   const [digest, setDigest] = useState<ShirabeDigest | null>(null);
   const [notes, setNotes] = useState<MailNote[]>([]);
+  const [unreadMails, setUnreadMails] = useState<MailItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const noteService = useNoteService();
 
   const loadDigest = useCallback(async () => {
     setLoading(true);
@@ -135,6 +138,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
 
       events.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
       unreadMails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      setUnreadMails(unreadMails);
 
       // Build urgent items from unread mails (top 5)
       const urgent: ShirabeUrgentItem[] = unreadMails.slice(0, 5).map((m) => ({
@@ -253,8 +257,18 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
         </button>
       </div>
 
+      {/* Running generation indicator */}
+      {noteService.runningCount > 0 && (
+        <div className="mb-3 px-3 py-2 bg-purple-500/10 border border-purple-500/30 rounded-lg flex items-center gap-2">
+          <span className="w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+          <span className="text-xs text-purple-400">
+            AI分析中... ({noteService.runningCount}件のノートを生成中)
+          </span>
+        </div>
+      )}
+
       {/* Summary stats bar */}
-      <div className="flex gap-3 mb-4">
+      <div className="flex gap-3 mb-4 flex-wrap">
         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-900 rounded-lg border border-surface-700/50">
           <span className="w-2 h-2 rounded-full bg-red-500" />
           <span className="text-xs text-surface-400">要対応</span>
@@ -524,7 +538,39 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
       </div>
 
       {/* Quick actions */}
-      <div className="mt-6 flex gap-3">
+      <div className="mt-6 flex gap-3 flex-wrap">
+        <button
+          onClick={() => {
+            // Batch analyze: generate notes for unread mails without notes
+            const noteIds = new Set(notes.map(n => n.id));
+            const toAnalyze = unreadMails.filter(m => {
+              const id = m.conversationId ? `conv-${m.conversationId}` : `mail-${m.id}`;
+              return !noteIds.has(id) && !noteService.isGenerating(id);
+            });
+            for (const mail of toAnalyze.slice(0, 10)) {
+              noteService.requestGeneration(mail, [], 'light', null);
+            }
+          }}
+          disabled={noteService.runningCount > 0}
+          className="px-4 py-2 bg-purple-500/20 hover:bg-purple-500/30 border border-purple-500/30 rounded-lg text-sm text-purple-400 transition-colors disabled:opacity-40"
+        >
+          {noteService.runningCount > 0
+            ? `分析中 (${noteService.runningCount}件)...`
+            : `未読メール一括分析 (${unreadMails.filter(m => {
+                const id = m.conversationId ? `conv-${m.conversationId}` : `mail-${m.id}`;
+                return !new Set(notes.map(n => n.id)).has(id);
+              }).length}件)`
+          }
+        </button>
+        <button
+          onClick={() => {
+            // Refresh notes after batch analysis
+            loadDigest();
+          }}
+          className="px-4 py-2 bg-surface-800 hover:bg-surface-700 border border-surface-700/50 rounded-lg text-sm text-surface-300 transition-colors"
+        >
+          データ更新
+        </button>
         <button
           onClick={() => {
             window.electronAPI.ptyCreate().then(() => {

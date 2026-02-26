@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { MailItem, MailNote, MailTag, NoteTodo, NoteHistoryEntry, QuickLabel, ThreadMessage } from '../types';
 import { BUILTIN_TAGS } from '../types';
+import { useNoteService } from '../context/NoteServiceContext';
 
 // ─── Quick label definitions (for backward compat) ──────
 const QUICK_LABELS: { id: QuickLabel; label: string; color: string }[] = [
@@ -178,7 +179,7 @@ function headingStyle(content: string): string {
   return 'text-surface-100';
 }
 
-function SimpleMarkdown({ text }: { text: string }) {
+function SimpleMarkdown({ text, onToggleCheckbox }: { text: string; onToggleCheckbox?: (lineIndex: number) => void }) {
   const lines = text.split('\n');
   // Track current section heading for context
   let currentSection = '';
@@ -207,14 +208,14 @@ function SimpleMarkdown({ text }: { text: string }) {
           const content = trimmed.replace(/^[-*]\s*\[[ x]\]\s*/, '');
           const color = checked ? '' : lineColor(content);
           return (
-            <label key={i} className={`flex items-start gap-1.5 pl-1 py-0.5 rounded cursor-default ${
-              !checked ? 'bg-amber-500/5' : ''
+            <label key={i} className={`flex items-start gap-1.5 pl-1 py-0.5 rounded cursor-pointer ${
+              !checked ? 'bg-amber-500/5 hover:bg-amber-500/10' : 'hover:bg-surface-800'
             }`}>
               <input
                 type="checkbox"
                 checked={checked}
-                readOnly
-                className={`w-3.5 h-3.5 mt-px rounded border flex-shrink-0 focus:ring-0 ${
+                onChange={() => onToggleCheckbox?.(i)}
+                className={`w-3.5 h-3.5 mt-px rounded border flex-shrink-0 focus:ring-0 cursor-pointer ${
                   checked
                     ? 'border-green-500/50 bg-green-500/20 text-green-500'
                     : 'border-amber-500/50 bg-surface-800 text-amber-500'
@@ -236,12 +237,12 @@ function SimpleMarkdown({ text }: { text: string }) {
 
           if (isActionSection || isDeadlineSection) {
             return (
-              <label key={i} className="flex items-start gap-1.5 pl-1 py-0.5 rounded cursor-default bg-amber-500/5">
+              <label key={i} className="flex items-start gap-1.5 pl-1 py-0.5 rounded cursor-pointer bg-amber-500/5 hover:bg-amber-500/10">
                 <input
                   type="checkbox"
                   checked={false}
-                  readOnly
-                  className={`w-3.5 h-3.5 mt-px rounded border flex-shrink-0 focus:ring-0 ${
+                  onChange={() => onToggleCheckbox?.(i)}
+                  className={`w-3.5 h-3.5 mt-px rounded border flex-shrink-0 focus:ring-0 cursor-pointer ${
                     isDeadlineSection
                       ? 'border-red-500/50 bg-surface-800 text-red-500'
                       : 'border-amber-500/50 bg-surface-800 text-amber-500'
@@ -288,10 +289,11 @@ export default function NotePanel({ mail, apiKey, threadMessages }: NotePanelPro
   const [editContent, setEditContent] = useState('');
   const [newTodo, setNewTodo] = useState('');
   const [showHistory, setShowHistory] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const noteService = useNoteService();
 
   const noteId = noteIdFromMail(mail);
+  const aiLoading = noteService.isGenerating(noteId);
 
   // Load note when mail changes
   useEffect(() => {
@@ -308,6 +310,15 @@ export default function NotePanel({ mail, apiKey, threadMessages }: NotePanelPro
     });
     return () => { cancelled = true; };
   }, [noteId]);
+
+  // Reload note when background generation completes
+  useEffect(() => {
+    if (noteService.recentlyCompleted.has(noteId)) {
+      window.electronAPI.getNote(noteId).then((loaded) => {
+        if (loaded) setNote(loaded);
+      });
+    }
+  }, [noteId, noteService.recentlyCompleted]);
 
   const saveNote = useCallback(async (updated: MailNote) => {
     setNote(updated);
@@ -350,7 +361,6 @@ export default function NotePanel({ mail, apiKey, threadMessages }: NotePanelPro
   // Toggle quick label
   const handleQuickLabel = useCallback((labelId: QuickLabel) => {
     if (!note) {
-      // Auto-create note with label
       const now = new Date().toISOString();
       const newNote: MailNote = {
         id: noteId,
@@ -423,363 +433,41 @@ export default function NotePanel({ mail, apiKey, threadMessages }: NotePanelPro
     setNewTodo('');
   }, [note, newTodo, saveNote]);
 
-  // AI: Update note (re-analyze with existing note context)
-  const handleAiUpdate = useCallback(async () => {
-    if (!note || aiLoading) return;
-    setAiLoading(true);
-    try {
-      const prompt = `以下のメールを分析して、既存ノートを更新してください。
-新しい情報があれば追記、状況変化があれば修正。重要な箇所は**太字**、
-締切は赤字相当（⚠️マーク付き）、緊急度が分かるように記載してください。
-
-件名: ${mail.subject}
-差出人: ${mail.from?.displayName || mail.from?.address || '不明'}
-本文: ${mail.preview?.slice(0, 1500) || '(本文なし)'}
-
-既存ノート:
-${note.content || '(空)'}
-
-以下の形式で出力（マークダウン）:
-## 判定
-[不要 / 要返信 / 個別対応 / 保留 / 対応済] — 理由を1文で
-
-## 要点
-- **重要な点は太字**で記載
-- ...
-
-## アクション
-- [ ] 具体的なタスク（担当が自分なら「→自分」）
-- [ ] ...
-
-## ⚠️ 期限
-- 日付と内容
-
-## メモ
-- 背景情報や注意点`;
-
-      const result = await window.electronAPI.runClaudeAnalysis(prompt, { mode: 'light' });
-      if (result.status === 'done' && result.markdown) {
-        const now = new Date().toISOString();
-        const updated: MailNote = {
-          ...note,
-          content: result.markdown,
-          updatedAt: now,
-          history: [
-            ...note.history,
-            { timestamp: now, type: 'ai_proposal', content: `更新: ${result.markdown.slice(0, 100)}` },
-          ],
-        };
-        saveNote(updated);
-      }
-    } finally {
-      setAiLoading(false);
+  // Toggle checkbox in markdown content
+  const handleToggleCheckbox = useCallback((lineIndex: number) => {
+    if (!note || !note.content) return;
+    const lines = note.content.split('\n');
+    if (lineIndex < 0 || lineIndex >= lines.length) return;
+    const line = lines[lineIndex];
+    // Toggle - [ ] ↔ - [x]
+    if (/^[-*]\s*\[x\]/i.test(line.trimStart())) {
+      lines[lineIndex] = line.replace(/\[x\]/i, '[ ]');
+    } else if (/^[-*]\s*\[ \]/.test(line.trimStart())) {
+      lines[lineIndex] = line.replace('[ ]', '[x]');
+    } else if (/^[-*]\s/.test(line.trimStart())) {
+      // Plain bullet in action section → convert to checkbox
+      lines[lineIndex] = line.replace(/^(\s*[-*])\s/, '$1 [x] ');
+    } else {
+      return; // not a toggleable line
     }
-  }, [note, mail, aiLoading, saveNote]);
+    const updated: MailNote = {
+      ...note,
+      content: lines.join('\n'),
+      updatedAt: new Date().toISOString(),
+    };
+    saveNote(updated);
+  }, [note, saveNote]);
 
-  // AI: Reconsider (fresh analysis ignoring existing note)
-  const handleAiReconsider = useCallback(async () => {
-    if (!note || aiLoading) return;
-    setAiLoading(true);
-    try {
-      const prompt = `以下のメールを白紙から分析してください。
-先入観なく、内容を読み、重要箇所を**太字**、締切を⚠️付き、
-緊急なものは🔴マークで強調してください。
+  // Delegate generation to NoteService (background, survives view changes)
+  const handleRegenerate = useCallback(() => {
+    noteService.requestGeneration(mail, threadMessages ?? [], 'deep', note);
+  }, [noteService, mail, threadMessages, note]);
 
-件名: ${mail.subject}
-差出人: ${mail.from?.displayName || mail.from?.address || '不明'}
-本文: ${mail.preview?.slice(0, 2000) || '(本文なし)'}
+  const handleLightGenerate = useCallback(() => {
+    noteService.requestGeneration(mail, threadMessages ?? [], 'light', note);
+  }, [noteService, mail, threadMessages, note]);
 
-以下の形式で出力（マークダウン）:
-## 判定
-[不要 / 要返信 / 個別対応 / 保留 / 対応済] — 理由を1文で
-
-## 要点
-- **重要な点は太字**で記載
-- ...
-
-## アクション
-- [ ] 具体的なタスク（担当が自分なら「→自分」）
-- [ ] ...
-
-## ⚠️ 期限
-- 日付と内容
-
-## メモ
-- 背景情報や注意点
-
-## 判断
-このメールに対して取るべき行動（返信要/不要/対応必要/情報のみ等）`;
-
-      const result = await window.electronAPI.runClaudeAnalysis(prompt, { mode: 'light' });
-      if (result.status === 'done' && result.markdown) {
-        const now = new Date().toISOString();
-        const updated: MailNote = {
-          ...note,
-          content: result.markdown,
-          updatedAt: now,
-          history: [
-            ...note.history,
-            { timestamp: now, type: 'ai_proposal', content: `再検討: ${result.markdown.slice(0, 100)}` },
-          ],
-        };
-        saveNote(updated);
-      }
-    } finally {
-      setAiLoading(false);
-    }
-  }, [note, mail, aiLoading, saveNote]);
-
-  // Shared: generate or update note with AI analysis
-  const generateOrUpdateNote = useCallback(async () => {
-    if (aiLoading) return;
-    setAiLoading(true);
-    try {
-      // Build thread context (cap each message to 3000 chars, total thread to 30000 chars)
-      const MAX_MSG_LEN = 3000;
-      const MAX_THREAD_LEN = 30000;
-      let threadSection: string;
-      if (threadMessages && threadMessages.length > 0) {
-        const parts: string[] = [];
-        let totalLen = 0;
-        for (let i = 0; i < threadMessages.length; i++) {
-          const msg = threadMessages[i];
-          const dir = msg.isSentByMe ? '【自分が送信】' : '【受信】';
-          const date = new Date(msg.date);
-          const dateStr = `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${date.getHours()}:${String(date.getMinutes()).padStart(2, '0')}`;
-          const body = msg.preview?.slice(0, MAX_MSG_LEN) || '(本文なし)';
-          const part = `--- メッセージ ${i + 1}/${threadMessages.length} ${dir} ---
-差出人: ${msg.from}
-宛先: ${msg.to.join(', ')}${msg.cc.length > 0 ? `\nCC: ${msg.cc.join(', ')}` : ''}
-日時: ${dateStr}
-件名: ${msg.subject}
-本文:
-${body}`;
-          if (totalLen + part.length > MAX_THREAD_LEN) {
-            parts.push(`\n... 以降 ${threadMessages.length - i}通は省略（文字数制限） ...`);
-            break;
-          }
-          parts.push(part);
-          totalLen += part.length;
-        }
-        threadSection = parts.join('\n\n');
-      } else {
-        threadSection = `件名: ${mail.subject}\n差出人: ${mail.from?.displayName || mail.from?.address || '不明'}\n本文: ${mail.preview?.slice(0, 2000) || '(本文なし)'}`;
-      }
-
-      const existingNoteSection = note?.content
-        ? `\n\n=== 既存ノート ===\n${note.content}`
-        : '';
-
-      const prompt = `あなたは業務メール分析のエキスパートです。以下のメールスレッド全文を読み、この案件について深く分析してください。
-
-=== メール情報 ===
-件名: ${mail.subject}
-アカウント: ${mail.accountEmail}
-
-=== スレッド全文（${threadMessages?.length || 1}通） ===
-${threadSection}
-${existingNoteSection}
-
-以下の観点で分析し、マークダウン形式で出力してください:
-
-## 案件概要
-このスレッドは何の仕事/案件か。1-2文で簡潔に。
-
-## 自分の役割
-アカウント所有者（${mail.accountEmail}）は何を求められているか。自分が送信したメッセージがあれば、それも踏まえて。
-
-## 現在のステータス
-- 誰のアクション待ちか
-- 何が未解決か
-- 進行中の事項
-
-## アクション
-- [ ] 具体的にやるべきこと（担当が自分なら「→自分」）
-- [ ] ...
-
-## ⚠️ 期限
-- 明示された期限（日付）
-- 暗示された期限（文脈から推測）
-
-## 判定
-[不要 / 要返信 / 個別対応 / 保留 / 対応済] — 理由を1文で
-
-## メモ
-- 背景情報や注意点`;
-
-      const result = await window.electronAPI.runClaudeAnalysis(prompt, { mode: 'light' });
-      if (result.status === 'done' && result.markdown) {
-        const now = new Date().toISOString();
-        const threadCount = threadMessages?.length ?? 1;
-
-        // Extract quickLabel from result
-        let detectedLabel: QuickLabel | undefined;
-        const verdictMatch = result.markdown.match(/## 判定\s*\n\s*\[?\s*(不要|要返信|個別対応|保留|対応済)/);
-        if (verdictMatch) {
-          const labelMap: Record<string, QuickLabel> = {
-            '不要': 'unnecessary', '要返信': 'reply', '個別対応': 'action', '保留': 'hold', '対応済': 'done',
-          };
-          detectedLabel = labelMap[verdictMatch[1]];
-        }
-
-        if (note) {
-          // Update existing note
-          const updated: MailNote = {
-            ...note,
-            content: result.markdown,
-            quickLabel: detectedLabel || note.quickLabel,
-            threadMessageCount: threadCount,
-            updatedAt: now,
-            history: [
-              ...note.history,
-              { timestamp: now, type: 'ai_proposal', content: `再生成（スレッド${threadCount}通）: ${result.markdown.slice(0, 80)}` },
-            ],
-          };
-          saveNote(updated);
-        } else {
-          // Create new note
-          const newNote: MailNote = {
-            id: noteId,
-            mailId: mail.id,
-            accountEmail: mail.accountEmail,
-            subject: mail.subject,
-            content: result.markdown,
-            todos: [],
-            quickLabel: detectedLabel,
-            threadMessageCount: threadCount,
-            history: [
-              { timestamp: now, type: 'created', content: 'ノート作成' },
-              { timestamp: now, type: 'ai_proposal', content: `AI自動生成（スレッド${threadCount}通）: ${result.markdown.slice(0, 80)}` },
-            ],
-            createdAt: now,
-            updatedAt: now,
-          };
-          saveNote(newNote);
-        }
-      }
-    } finally {
-      setAiLoading(false);
-    }
-  }, [note, mail, aiLoading, threadMessages, noteId, saveNote]);
-
-  // AI: Deep regeneration (MCP tools for thorough analysis + note save)
-  const handleDeepRegenerate = useCallback(async () => {
-    if (aiLoading) return;
-    setAiLoading(true);
-    try {
-      const prompt = `あなたはメール分析の専門家です。以下のメールについてMCPツールを使って徹底的に調査し、ノートを作成・更新してください。
-
-=== 対象メール ===
-メールID: ${mail.id}
-${mail.conversationId ? `会話ID: ${mail.conversationId}` : ''}
-件名: ${mail.subject}
-差出人: ${mail.from?.displayName || mail.from?.address || '不明'}
-アカウント: ${mail.accountEmail}
-
-=== 調査手順 ===
-1. まず mcp__shirabe__get_note でメールID ${mail.id}${mail.conversationId ? ` (会話ID: ${mail.conversationId})` : ''} の既存ノートを確認
-2. mcp__shirabe__get_mail_detail でメールID ${mail.id} の本文を取得
-3. mcp__shirabe__get_mail_thread でスレッド全体を取得して文脈を把握
-4. mcp__shirabe__analyze_thread でスレッドのアクション項目・緊急度を分析
-5. 必要に応じて mcp__shirabe__search_mails で関連メールを検索
-6. mcp__shirabe__update_note で調査結果をノートに保存:
-   - mail_id: ${mail.id}
-   - content: 以下のマークダウン形式
-   - todos: 抽出したアクション項目
-   - tags: 判定カテゴリ (urgent/reply/action/info/unnecessary/hold)
-   ${mail.conversationId ? `- conversation_id: ${mail.conversationId}` : ''}
-
-=== ノートの出力形式（Markdown） ===
-## 案件概要
-このスレッドの概要を1-2文で。
-
-## 自分の役割
-${mail.accountEmail} が求められていること。
-
-## 現在のステータス
-- 誰のアクション待ちか
-- 未解決事項
-
-## 判定
-**【カテゴリ】** — 理由1文
-
-## アクション
-- [ ] 具体的なタスク（→自分 or →相手）
-
-## ⚠️ 期限
-- 期限があれば記載
-
-## メモ
-- 背景情報や注意点
-
-=== 重要 ===
-- 必ず最後に update_note でノートに保存すること
-- 既存ノートがある場合は replace_content: true で全体を置き換え
-- 最終的な分析結果をMarkdown形式で出力すること`;
-
-      const result = await window.electronAPI.runClaudeAnalysis(prompt, { mode: 'deep' });
-
-      // After deep analysis, MCP update_note may have written directly to the note file.
-      // Reload note from disk to get the latest state.
-      const reloaded = await window.electronAPI.getNote(noteId);
-      if (reloaded) {
-        setNote(reloaded);
-      } else if (result.status === 'done' && result.markdown) {
-        // Fallback: MCP didn't save, so save from result
-        const now = new Date().toISOString();
-        const threadCount = threadMessages?.length ?? 1;
-
-        let detectedLabel: QuickLabel | undefined;
-        const verdictMatch = result.markdown.match(/## 判定\s*\n\s*\*?\*?\s*【\s*(至急|要返信|要対応|情報|不要|保留)/);
-        if (verdictMatch) {
-          const labelMap: Record<string, QuickLabel> = {
-            '至急': 'action', '要返信': 'reply', '要対応': 'action', '情報': 'done', '不要': 'unnecessary', '保留': 'hold',
-          };
-          detectedLabel = labelMap[verdictMatch[1]];
-        }
-
-        if (note) {
-          const updated: MailNote = {
-            ...note,
-            content: result.markdown,
-            quickLabel: detectedLabel || note.quickLabel,
-            threadMessageCount: threadCount,
-            updatedAt: now,
-            history: [
-              ...note.history,
-              { timestamp: now, type: 'ai_proposal', content: `深層再生成（MCP）: ${result.markdown.slice(0, 80)}` },
-            ],
-          };
-          saveNote(updated);
-        } else {
-          const newNote: MailNote = {
-            id: noteId,
-            mailId: mail.id,
-            accountEmail: mail.accountEmail,
-            subject: mail.subject,
-            content: result.markdown,
-            todos: [],
-            quickLabel: detectedLabel,
-            threadMessageCount: threadCount,
-            history: [
-              { timestamp: now, type: 'created', content: 'ノート作成' },
-              { timestamp: now, type: 'ai_proposal', content: `深層再生成（MCP）: ${result.markdown.slice(0, 80)}` },
-            ],
-            createdAt: now,
-            updatedAt: now,
-          };
-          saveNote(newNote);
-        }
-      }
-    } finally {
-      setAiLoading(false);
-    }
-  }, [note, mail, aiLoading, threadMessages, noteId, saveNote]);
-
-  // Regenerate: manual trigger uses deep analysis with MCP tools
-  const handleRegenerate = handleDeepRegenerate;
-
-  // Auto-generate: create note if none exists, or update if thread has grown
+  // Auto-generate: when no note exists or thread has grown
   useEffect(() => {
     if (aiLoading || loading) return;
 
@@ -790,7 +478,7 @@ ${mail.accountEmail} が求められていること。
     if (!shouldGenerate && !shouldUpdate) return;
 
     const timer = setTimeout(() => {
-      generateOrUpdateNote();
+      noteService.requestGeneration(mail, threadMessages ?? [], 'light', note);
     }, 500);
 
     return () => clearTimeout(timer);
@@ -885,20 +573,12 @@ ${mail.accountEmail} が求められていること。
           {aiLoading ? '分析中...' : '再生成'}
         </button>
         <button
-          onClick={handleAiUpdate}
+          onClick={handleLightGenerate}
           disabled={aiLoading}
           className="px-1.5 py-px text-[9px] bg-purple-600/80 hover:bg-purple-500 text-white rounded transition-colors disabled:opacity-40"
-          title="既存ノートを元にAI更新"
+          title="既存ノートを元にAI更新（軽量）"
         >
           {aiLoading ? '分析中...' : '更新'}
-        </button>
-        <button
-          onClick={handleAiReconsider}
-          disabled={aiLoading}
-          className="px-1.5 py-px text-[9px] bg-indigo-600/80 hover:bg-indigo-500 text-white rounded transition-colors disabled:opacity-40"
-          title="メールを再分析（白紙から）"
-        >
-          再検討
         </button>
         <button
           onClick={() => {
@@ -982,7 +662,7 @@ ${mail.accountEmail} が求められていること。
             placeholder="ノートを入力... (Ctrl+Enter で保存)"
           />
         ) : note.content ? (
-          <SimpleMarkdown text={note.content} />
+          <SimpleMarkdown text={note.content} onToggleCheckbox={handleToggleCheckbox} />
         ) : (
           <p className="text-[10px] text-surface-400 italic">ノート未記入（編集 or AI更新で追加）</p>
         )}
