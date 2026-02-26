@@ -41,8 +41,8 @@ const api = {
     ipcRenderer.on('auditProgress', handler);
     return () => ipcRenderer.removeListener('auditProgress', handler);
   },
-  runClaudeAnalysis: (prompt: string) =>
-    ipcRenderer.invoke('runClaudeAnalysis', prompt),
+  runClaudeAnalysis: (prompt: string, options?: { mode?: string }) =>
+    ipcRenderer.invoke('runClaudeAnalysis', prompt, options),
   getProposals: () =>
     ipcRenderer.invoke('getProposals'),
   deleteProposal: (id: string) =>
