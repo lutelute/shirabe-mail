@@ -1886,65 +1886,63 @@ JSON以外の説明は不要です。`;
     await shell.openExternal(mailto);
   });
 
-  // Open a specific mail in eM Client — copy to clipboard, activate, open search
+  // Open a specific mail in eM Client — full automation via AppleScript + Swift helper
   ipcMain.handle('openMailInEmClient', async (_event, params: {
     subject: string;
     fromAddress?: string;
-  }): Promise<{ success: boolean; error?: string; clipboardCopied?: boolean; searchOpened?: boolean }> => {
+  }): Promise<{ success: boolean; error?: string; searchOpened?: boolean }> => {
     try {
-      // 1. Copy subject to clipboard via Electron API
-      const { clipboard } = require('electron');
-      clipboard.writeText(params.subject);
-
-      // 2. AppleScript: activate eM Client, raise main window, click search menu
-      //    Menu clicks work without keystroke Accessibility permissions.
-      //    Keystrokes (Cmd+V, Enter) are blocked unless osascript has Accessibility.
-      const script = `
-tell application "eM Client"
-    activate
-end tell
+      // Step 1: Activate eM Client, raise main window, open search dialog
+      const openSearchScript = `
+tell application "eM Client" to activate
 delay 0.5
 tell application "System Events"
     tell process "eM Client"
         set frontmost to true
-        -- Raise the main mail window (contains "eM Client" in title)
         set wins to every window
         repeat with w in wins
             if name of w contains "eM Client" then
                 perform action "AXRaise" of w
+                exit repeat
             end if
         end repeat
         delay 0.3
-        -- Click search menu: 編集(E) > 検索(F)
         try
-            click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
+            set searchWin to window "LayeredBaseForm"
+            click (first button of searchWin whose title is "検索(S)")
             delay 0.3
-            -- Try keystrokes (works if osascript has Accessibility permission)
-            keystroke "a" using {command down}
-            delay 0.05
-            keystroke "v" using {command down}
-            delay 0.05
-            key code 36
         end try
+        click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
     end tell
 end tell
 `;
-
       const tmpScript = path.join(os.tmpdir(), 'shirabe-emclient-open.scpt');
-      fs.writeFileSync(tmpScript, script, 'utf-8');
-
-      let searchOpened = false;
-      try {
-        execSync(`osascript "${tmpScript}"`, { timeout: 10000 });
-        searchOpened = true; // Full automation succeeded (including keystrokes)
-      } catch {
-        // Keystrokes failed (no Accessibility permission for osascript)
-        // But menu click likely succeeded — search bar is open with focus
-        searchOpened = true;
-      }
+      fs.writeFileSync(tmpScript, openSearchScript, 'utf-8');
+      execSync(`osascript "${tmpScript}"`, { timeout: 10000 });
       try { fs.unlinkSync(tmpScript); } catch { /* noop */ }
 
-      return { success: true, clipboardCopied: true, searchOpened };
+      // Step 2: Use Swift helper to set subject in search field and click search
+      // The helper uses AX API + CGEvent to paste into the "件名:" field
+      const helperPath = isDev
+        ? path.join(__dirname, '..', 'resources', 'emclient-search')
+        : path.join(process.resourcesPath, 'emclient-search');
+
+      if (fs.existsSync(helperPath)) {
+        // Wait for search dialog to fully appear
+        await new Promise(resolve => setTimeout(resolve, 800));
+        try {
+          execSync(`"${helperPath}" "${params.subject.replace(/"/g, '\\"')}"`, { timeout: 10000 });
+          return { success: true, searchOpened: true };
+        } catch (helperErr) {
+          console.warn('[openMailInEmClient] Swift helper failed:', (helperErr as Error).message);
+          // Fallback: clipboard is set by the helper, search dialog is open
+        }
+      }
+
+      // Fallback: copy to clipboard manually, search dialog is open
+      const { clipboard: clip } = require('electron');
+      clip.writeText(params.subject);
+      return { success: true, searchOpened: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
     }

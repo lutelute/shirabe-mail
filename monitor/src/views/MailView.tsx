@@ -115,6 +115,18 @@ export default function MailView({ onNavigate }: MailViewProps) {
   const [selectedFolderIds, setSelectedFolderIds] = useState<Set<number>>(new Set());
   const [showFolderFilter, setShowFolderFilter] = useState(false);
   const [noteMap, setNoteMap] = useState<Map<string, MailNote>>(new Map());
+  const [rightPanelOpen, setRightPanelOpen] = useState(() => {
+    const stored = localStorage.getItem('shirabe_right_panel_open');
+    return stored !== null ? stored === 'true' : true;
+  });
+
+  const toggleRightPanel = useCallback(() => {
+    setRightPanelOpen(prev => {
+      const next = !prev;
+      localStorage.setItem('shirabe_right_panel_open', String(next));
+      return next;
+    });
+  }, []);
 
   const { widths, onDown } = useColumnResize(settings.mailColumnRatio);
   const { topPct: col3TopPct, onDown: col3RowDown, containerRef: col3Ref } = useRowResize(75);
@@ -546,11 +558,20 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
     setSelectedFolderIds(new Set([-1])); // sentinel: match nothing
   }, []);
 
+  // Compute effective column widths: when right panel is hidden, redistribute Col 3 width to Col 1 & 2
+  const effectiveWidths = rightPanelOpen
+    ? widths
+    : [
+        widths[0] + widths[2] * (widths[0] / (widths[0] + widths[1])),
+        widths[1] + widths[2] * (widths[1] / (widths[0] + widths[1])),
+        0,
+      ] as [number, number, number];
+
   return (
     <div id="mail-cols" className="flex h-full w-full overflow-hidden">
 
       {/* ========== Col 1: Toolbar + MailTable ========== */}
-      <div className="flex flex-col" style={{ width: `${widths[0]}%`, height: '100%' }}>
+      <div className="flex flex-col" style={{ width: `${effectiveWidths[0]}%`, height: '100%' }}>
         {/* Toolbar */}
         <div className="px-2 py-1.5 border-b border-surface-700/50 bg-surface-900/50 flex-shrink-0">
           <div className="flex items-center justify-between mb-1">
@@ -723,7 +744,7 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
       <div className="w-1 flex-shrink-0 cursor-col-resize bg-surface-700/30 hover:bg-accent-500/30 transition-colors" onMouseDown={(e) => onDown(0, e)} />
 
       {/* ========== Col 2: ThreadDetailPane ========== */}
-      <div className="flex flex-col border-r border-surface-700/50" style={{ width: `${widths[1]}%`, height: '100%' }}>
+      <div className="flex flex-col border-r border-surface-700/50 relative" style={{ width: `${effectiveWidths[1]}%`, height: '100%' }}>
         <ThreadDetailPane
           selectedMail={selectedMail}
           threadMessages={threadMessages}
@@ -735,27 +756,47 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
           investigateLoading={investigateLoading}
           onSendToCli={handleSendToCli}
         />
+        {/* Right panel toggle button — positioned at top-right edge of Col 2 */}
+        <button
+          onClick={toggleRightPanel}
+          title={rightPanelOpen ? 'パネルを閉じる' : 'パネルを開く'}
+          className="absolute top-1 right-1 z-10 p-0.5 rounded hover:bg-surface-700 text-surface-500 hover:text-surface-200 transition-colors"
+        >
+          {rightPanelOpen ? (
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8.25 4.5l7.5 7.5-7.5 7.5" />
+            </svg>
+          ) : (
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          )}
+        </button>
       </div>
 
-      {/* Resizer */}
-      <div className="w-1 flex-shrink-0 cursor-col-resize bg-surface-700/30 hover:bg-accent-500/30 transition-colors" onMouseDown={(e) => onDown(1, e)} />
+      {rightPanelOpen && (
+        <>
+          {/* Resizer */}
+          <div className="w-1 flex-shrink-0 cursor-col-resize bg-surface-700/30 hover:bg-accent-500/30 transition-colors" onMouseDown={(e) => onDown(1, e)} />
 
-      {/* ========== Col 3: Proposal (top) + Chat (bottom) — vertically resizable ========== */}
-      <div ref={col3Ref} className="flex flex-col" style={{ width: `${widths[2]}%`, height: '100%' }}>
-        {/* Top: TodoProposalPanel */}
-        <div className="flex flex-col overflow-hidden" style={{ height: `${col3TopPct}%`, minHeight: 0 }}>
-          <TodoProposalPanel onNavigate={onNavigate} refreshTrigger={proposalRefreshTrigger} />
-        </div>
-        {/* Vertical resizer */}
-        <div
-          className="h-1 flex-shrink-0 cursor-row-resize bg-surface-700/30 hover:bg-accent-500/30 transition-colors"
-          onMouseDown={col3RowDown}
-        />
-        {/* Bottom: ChatPanel (lazy-start terminal) */}
-        <div className="flex flex-col flex-1 overflow-hidden" style={{ minHeight: 0 }}>
-          <ChatPanel />
-        </div>
-      </div>
+          {/* ========== Col 3: Proposal (top) + Chat (bottom) — vertically resizable ========== */}
+          <div ref={col3Ref} className="flex flex-col" style={{ width: `${widths[2]}%`, height: '100%' }}>
+            {/* Top: TodoProposalPanel */}
+            <div className="flex flex-col overflow-hidden" style={{ height: `${col3TopPct}%`, minHeight: 0 }}>
+              <TodoProposalPanel onNavigate={onNavigate} refreshTrigger={proposalRefreshTrigger} />
+            </div>
+            {/* Vertical resizer */}
+            <div
+              className="h-1 flex-shrink-0 cursor-row-resize bg-surface-700/30 hover:bg-accent-500/30 transition-colors"
+              onMouseDown={col3RowDown}
+            />
+            {/* Bottom: ChatPanel (lazy-start terminal) */}
+            <div className="flex flex-col flex-1 overflow-hidden" style={{ minHeight: 0 }}>
+              <ChatPanel />
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

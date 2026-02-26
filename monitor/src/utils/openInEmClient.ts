@@ -6,11 +6,7 @@
 export async function openInEmClient(params: { subject: string; fromAddress?: string }): Promise<void> {
   const result = await window.electronAPI.openMailInEmClient(params);
 
-  if (result.searchOpened && result.clipboardCopied) {
-    showToast('eM Clientの検索を開きました — Cmd+Vで貼り付けてEnter');
-  } else if (result.clipboardCopied) {
-    showToast('件名をクリップボードにコピーしました');
-  } else if (!result.success) {
+  if (!result.success) {
     showToast('eM Clientを開けませんでした', true);
   }
 }

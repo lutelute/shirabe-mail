@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from './context/AppContext';
 import type { ViewType } from './types';
 import Sidebar from './components/layout/Sidebar';
@@ -19,10 +19,24 @@ import SettingsView from './views/SettingsView';
 import ShirabeView from './views/ShirabeView';
 import SetupWizard from './components/SetupWizard';
 
+const LS_SIDEBAR_KEY = 'shirabe_sidebar_open';
+
 export default function App() {
   const [activeView, setActiveView] = useState<ViewType>('shirabe');
   const { settings, isFirstRun } = useAppContext();
   const [showWizard, setShowWizard] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => {
+    const stored = localStorage.getItem(LS_SIDEBAR_KEY);
+    return stored !== null ? stored === 'true' : true;
+  });
+
+  const toggleSidebar = useCallback(() => {
+    setSidebarOpen(prev => {
+      const next = !prev;
+      localStorage.setItem(LS_SIDEBAR_KEY, String(next));
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     if (isFirstRun) setShowWizard(true);
@@ -37,17 +51,21 @@ export default function App() {
     }
   }, [settings.theme]);
 
-  // Ctrl+, / Cmd+, to open settings
+  // Ctrl+, / Cmd+, to open settings; Cmd+B / Ctrl+B to toggle sidebar
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
         e.preventDefault();
         setActiveView('settings');
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b' && !e.shiftKey) {
+        e.preventDefault();
+        toggleSidebar();
+      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, []);
+  }, [toggleSidebar]);
 
   const renderContent = () => {
     switch (activeView) {
@@ -86,7 +104,22 @@ export default function App() {
     <div className="h-screen bg-surface-950 text-surface-100 flex flex-col overflow-hidden">
       <HeaderBar />
       <div className="flex-1 flex overflow-hidden">
-        <Sidebar activeView={activeView} onNavigate={setActiveView} />
+        {/* Left sidebar with collapse/expand */}
+        {sidebarOpen ? (
+          <Sidebar activeView={activeView} onNavigate={setActiveView} onCollapse={toggleSidebar} />
+        ) : (
+          <div className="flex flex-col items-center py-2 bg-surface-900 border-r border-surface-700/50 flex-shrink-0 w-8">
+            <button
+              onClick={toggleSidebar}
+              title="サイドバーを開く"
+              className="p-1 rounded hover:bg-surface-700 text-surface-500 hover:text-surface-200 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
+              </svg>
+            </button>
+          </div>
+        )}
         <main className="flex-1 overflow-hidden">
           <ErrorBoundary viewName={activeView}>
             {renderContent()}

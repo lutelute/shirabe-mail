@@ -4,6 +4,7 @@ interface SidebarProps {
   activeView: ViewType;
   onNavigate: (view: ViewType) => void;
   unreadCount?: number;
+  onCollapse?: () => void;
 }
 
 interface NavSection {
@@ -152,13 +153,27 @@ const SECTIONS: NavSection[] = [
   },
 ];
 
-export default function Sidebar({ activeView, onNavigate, unreadCount }: SidebarProps) {
+export default function Sidebar({ activeView, onNavigate, unreadCount, onCollapse }: SidebarProps) {
   const handleOpenClaudeCode = () => {
     window.electronAPI.openClaudeCode();
   };
 
   return (
     <nav className="w-44 bg-surface-900 border-r border-surface-700/50 flex flex-col py-2 overflow-hidden flex-shrink-0">
+      {/* Collapse button */}
+      {onCollapse && (
+        <div className="flex justify-end px-2 mb-1">
+          <button
+            onClick={onCollapse}
+            title="サイドバーを閉じる"
+            className="p-0.5 rounded hover:bg-surface-700 text-surface-500 hover:text-surface-200 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15.75 19.5L8.25 12l7.5-7.5" />
+            </svg>
+          </button>
+        </div>
+      )}
       <div className="flex-1">
         {SECTIONS.map((section, sIdx) => (
           <div key={sIdx}>

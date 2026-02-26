@@ -18,6 +18,8 @@ files:
   - "!node_modules/**/test{,s}/**"
   - "!node_modules/**/*.map"
 extraResources:
+  - from: "resources/emclient-search"
+    to: "emclient-search"
   - from: "../mcp-server/build"
     to: "mcp-server/build"
     filter:
