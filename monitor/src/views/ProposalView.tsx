@@ -3,6 +3,7 @@ import type { Proposal, AnalysisLogEntry } from '../types';
 import EmptyState from '../components/shared/EmptyState';
 import MarkdownRenderer from '../components/MarkdownRenderer';
 import { useAnalysisPrompt } from '../hooks/useAnalysisPrompt';
+import { useAnalysisProgress } from '../hooks/useAnalysisProgress';
 
 function formatTimestamp(ts: Date | string): string {
   const d = new Date(ts);
@@ -21,6 +22,7 @@ export default function ProposalView() {
   const [progressMessage, setProgressMessage] = useState('');
   const [analysisLogs, setAnalysisLogs] = useState<AnalysisLogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const { percent, phaseLabel } = useAnalysisProgress(analysisLogs, running);
   const [autoEnabled, setAutoEnabled] = useState(false);
   const [autoIntervalHours, setAutoIntervalHours] = useState(2);
   const autoTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -126,8 +128,19 @@ export default function ProposalView() {
             )}
           </button>
 
-          {running && progressMessage && (
-            <p className="text-xs text-surface-400 truncate">{progressMessage}</p>
+          {running && (
+            <div className="space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-surface-400">{phaseLabel || progressMessage}</span>
+                <span className="text-xs text-surface-500">{percent}%</span>
+              </div>
+              <div className="w-full h-2 bg-surface-800 rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-accent-500 rounded-full transition-all duration-700 ease-out"
+                  style={{ width: `${percent}%` }}
+                />
+              </div>
+            </div>
           )}
 
           {/* Analysis log */}

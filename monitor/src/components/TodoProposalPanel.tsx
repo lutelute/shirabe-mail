@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Proposal, SkillSummary, ViewType, AccountConfig, AnalysisLogEntry } from '../types';
 import { useAnalysisPrompt } from '../hooks/useAnalysisPrompt';
+import { useAnalysisProgress } from '../hooks/useAnalysisProgress';
 import MarkdownRenderer from './MarkdownRenderer';
 
 function formatTimestamp(ts: Date | string): string {
@@ -66,6 +67,7 @@ export default function TodoProposalPanel({ onNavigate, refreshTrigger }: Props)
   const [progressMessage, setProgressMessage] = useState('');
   const [analysisLogs, setAnalysisLogs] = useState<AnalysisLogEntry[]>([]);
   const logEndRef = useRef<HTMLDivElement>(null);
+  const { percent, phaseLabel } = useAnalysisProgress(analysisLogs, running);
 
   // --- Account selection for analysis ---
   const [accounts, setAccounts] = useState<AccountConfig[]>([]);
@@ -279,8 +281,19 @@ export default function TodoProposalPanel({ onNavigate, refreshTrigger }: Props)
               </button>
             </div>
 
-            {running && progressMessage && (
-              <p className="text-[10px] text-surface-400 truncate">{progressMessage}</p>
+            {running && (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-surface-400">{phaseLabel || progressMessage}</span>
+                  <span className="text-[10px] text-surface-500">{percent}%</span>
+                </div>
+                <div className="w-full h-1.5 bg-surface-800 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-accent-500 rounded-full transition-all duration-700 ease-out"
+                    style={{ width: `${percent}%` }}
+                  />
+                </div>
+              </div>
             )}
 
             {/* Compact analysis log */}

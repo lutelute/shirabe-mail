@@ -66,6 +66,23 @@ function findClaudeCli(): string {
 
 const CLAUDE_CLI_PATH = findClaudeCli();
 
+// --- Node binary resolution (GUI apps have limited PATH) ---
+function findNodeBinary(): string {
+  const candidates = [
+    '/opt/homebrew/bin/node',     // Homebrew (Apple Silicon)
+    '/usr/local/bin/node',        // Homebrew (Intel) / manual install
+    path.join(os.homedir(), '.local/bin/node'),
+    path.join(os.homedir(), '.nvm/current/bin/node'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  try {
+    return execSync('which node', { encoding: 'utf-8', timeout: 3000 }).trim();
+  } catch { /* ignore */ }
+  return 'node'; // fallback
+}
+
 // --- MCP config management ---
 function getMcpConfigPath(): string {
   // Always use userData path (generated dynamically)
@@ -85,10 +102,13 @@ function ensureMcpConfig(): string {
     return '';  // MCP unavailable
   }
 
+  // Resolve absolute path to node (GUI apps have limited PATH)
+  const nodeCmd = findNodeBinary();
+
   const config = {
     mcpServers: {
       shirabe: {
-        command: 'node',
+        command: nodeCmd,
         args: [serverPath],
         env: {},
       },
@@ -655,12 +675,15 @@ function registerIpcHandlers(): void {
 - 判定理由を1文で明記
 
 ## 利用可能なツール
-MCPサーバー経由で以下のツールが使えます:
-- get_mail_detail: メール本文の詳細取得
-- get_mail_thread: スレッド全体の取得
-- search_mails: 関連メールの検索
-- get_accounts: アカウント一覧
-- analyze_thread: スレッド分析（アクション項目、緊急度）
+MCPサーバー経由で以下のツールが使えます（必ずこの正確な名前で呼び出してください）:
+- mcp__shirabe__get_mail_detail: メール本文の詳細取得
+- mcp__shirabe__get_mail_thread: スレッド全体の取得
+- mcp__shirabe__search_mails: 関連メールの検索
+- mcp__shirabe__get_accounts: アカウント一覧
+- mcp__shirabe__analyze_thread: スレッド分析（アクション項目、緊急度）
+- mcp__shirabe__get_unread_mails: 未読メール取得
+- mcp__shirabe__get_recent_mails: 最近のメール取得
+- mcp__shirabe__tag_mail: メールへのタグ付け
 
 ## 出力形式
 Markdown形式で以下のセクションを含める:
