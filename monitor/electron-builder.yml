@@ -23,6 +23,17 @@ extraResources:
     filter:
       - "**/*.js"
       - "**/*.json"
+  - from: "../mcp-server/package.json"
+    to: "mcp-server/package.json"
+  - from: "../mcp-server/node_modules"
+    to: "mcp-server/node_modules"
+    filter:
+      - "!**/typescript/**"
+      - "!**/@types/**"
+      - "!**/test{,s}/**"
+      - "!**/*.map"
+      - "!**/*.d.ts"
+      - "!**/{README,readme,CHANGELOG,changelog}.md"
 asar: true
 asarUnpack:
   - "node_modules/better-sqlite3/**"

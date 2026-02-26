@@ -1,6 +1,6 @@
 {
   "name": "shirabe",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "description": "調 - メール分析・AI分類デスクトップアプリ (eM Client)",
   "type": "module",
   "main": "dist-electron/main.js",
