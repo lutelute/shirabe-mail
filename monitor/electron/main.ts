@@ -1,4 +1,4 @@
-import { app, BrowserWindow, BrowserView, ipcMain, Tray, Menu, shell } from 'electron';
+import { app, BrowserWindow, BrowserView, ipcMain, Tray, Menu, shell, clipboard } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -1894,14 +1894,19 @@ JSON以外の説明は不要です。`;
     subject: string;
     fromAddress?: string;
   }): Promise<{ success: boolean; error?: string; searchOpened?: boolean }> => {
+    // Always copy subject to clipboard first (guaranteed to work)
+    clipboard.writeText(params.subject);
+
     try {
       // Step 1: Activate eM Client, raise main window, open search dialog
+      // Robust AppleScript: handles case where menus are reduced (mail detail window in front)
       const openSearchScript = `
 tell application "eM Client" to activate
-delay 0.5
+delay 0.8
 tell application "System Events"
     tell process "eM Client"
         set frontmost to true
+        -- Raise the main mail window (contains "eM Client" in title)
         set wins to every window
         repeat with w in wins
             if name of w contains "eM Client" then
@@ -1909,45 +1914,63 @@ tell application "System Events"
                 exit repeat
             end if
         end repeat
-        delay 0.3
+        delay 0.5
+        -- Close existing search dialog if open
         try
             set searchWin to window "LayeredBaseForm"
             click (first button of searchWin whose title is "検索(S)")
             delay 0.3
         end try
-        click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
+        -- Open search — try full menu first, then fallback
+        try
+            click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
+        on error
+            -- Menus might be reduced; try to raise main window again
+            delay 0.3
+            set wins to every window
+            repeat with w in wins
+                if name of w contains "eM Client" or name of w contains "受信トレイ" then
+                    perform action "AXRaise" of w
+                    exit repeat
+                end if
+            end repeat
+            delay 0.5
+            click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
+        end try
     end tell
 end tell
 `;
       const tmpScript = path.join(os.tmpdir(), 'shirabe-emclient-open.scpt');
       fs.writeFileSync(tmpScript, openSearchScript, 'utf-8');
-      execSync(`osascript "${tmpScript}"`, { timeout: 10000 });
+      execSync(`osascript "${tmpScript}"`, { timeout: 15000 });
       try { fs.unlinkSync(tmpScript); } catch { /* noop */ }
 
-      // Step 2: Use Swift helper to set subject in search field and click search
-      // The helper uses AX API + CGEvent to paste into the "件名:" field
+      // Step 2: Use Swift helper to set subject and click search
       const helperPath = isDev
         ? path.join(__dirname, '..', 'resources', 'emclient-search')
         : path.join(process.resourcesPath, 'emclient-search');
 
       if (fs.existsSync(helperPath)) {
-        // Wait for search dialog to fully appear
         await new Promise(resolve => setTimeout(resolve, 800));
         try {
           execSync(`"${helperPath}" "${params.subject.replace(/"/g, '\\"')}"`, { timeout: 10000 });
           return { success: true, searchOpened: true };
         } catch (helperErr) {
           console.warn('[openMailInEmClient] Swift helper failed:', (helperErr as Error).message);
-          // Fallback: clipboard is set by the helper, search dialog is open
         }
       }
 
-      // Fallback: copy to clipboard manually, search dialog is open
-      const { clipboard: clip } = require('electron');
-      clip.writeText(params.subject);
+      // Search dialog is open, clipboard has the subject
       return { success: true, searchOpened: true };
     } catch (err) {
-      return { success: false, error: err instanceof Error ? err.message : String(err) };
+      // AppleScript failed — eM Client might not be installed or running
+      // But clipboard is already set, try to just open eM Client
+      try {
+        execSync('open -a "eM Client"', { timeout: 5000 });
+        return { success: true, searchOpened: false };
+      } catch {
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
     }
   });
 }
