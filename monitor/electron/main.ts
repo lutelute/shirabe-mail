@@ -1889,88 +1889,38 @@ JSON以外の説明は不要です。`;
     await shell.openExternal(mailto);
   });
 
-  // Open a specific mail in eM Client — full automation via AppleScript + Swift helper
+  // Open a specific mail in eM Client — single Swift helper handles everything
   ipcMain.handle('openMailInEmClient', async (_event, params: {
     subject: string;
     fromAddress?: string;
   }): Promise<{ success: boolean; error?: string; searchOpened?: boolean }> => {
-    // Always copy subject to clipboard first (guaranteed to work)
+    // Backup: always set clipboard so user can paste manually
     clipboard.writeText(params.subject);
 
+    const helperPath = isDev
+      ? path.join(__dirname, '..', 'resources', 'emclient-search')
+      : path.join(process.resourcesPath, 'emclient-search');
+
+    if (!fs.existsSync(helperPath)) {
+      // No helper binary — just open eM Client
+      try { execSync('open -a "eM Client"', { timeout: 5000 }); } catch { /* noop */ }
+      return { success: true, searchOpened: false };
+    }
+
     try {
-      // Step 1: Activate eM Client, raise main window, open search dialog
-      // Robust AppleScript: handles case where menus are reduced (mail detail window in front)
-      const openSearchScript = `
-tell application "eM Client" to activate
-delay 0.8
-tell application "System Events"
-    tell process "eM Client"
-        set frontmost to true
-        -- Raise the main mail window (contains "eM Client" in title)
-        set wins to every window
-        repeat with w in wins
-            if name of w contains "eM Client" then
-                perform action "AXRaise" of w
-                exit repeat
-            end if
-        end repeat
-        delay 0.5
-        -- Close existing search dialog if open
-        try
-            set searchWin to window "LayeredBaseForm"
-            click (first button of searchWin whose title is "検索(S)")
-            delay 0.3
-        end try
-        -- Open search — try full menu first, then fallback
-        try
-            click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
-        on error
-            -- Menus might be reduced; try to raise main window again
-            delay 0.3
-            set wins to every window
-            repeat with w in wins
-                if name of w contains "eM Client" or name of w contains "受信トレイ" then
-                    perform action "AXRaise" of w
-                    exit repeat
-                end if
-            end repeat
-            delay 0.5
-            click menu item "検索(F)" of menu 1 of menu bar item "編集(E)" of menu bar 1
-        end try
-    end tell
-end tell
-`;
-      const tmpScript = path.join(os.tmpdir(), 'shirabe-emclient-open.scpt');
-      fs.writeFileSync(tmpScript, openSearchScript, 'utf-8');
-      execSync(`osascript "${tmpScript}"`, { timeout: 15000 });
-      try { fs.unlinkSync(tmpScript); } catch { /* noop */ }
-
-      // Step 2: Use Swift helper to set subject and click search
-      const helperPath = isDev
-        ? path.join(__dirname, '..', 'resources', 'emclient-search')
-        : path.join(process.resourcesPath, 'emclient-search');
-
-      if (fs.existsSync(helperPath)) {
-        await new Promise(resolve => setTimeout(resolve, 800));
-        try {
-          execSync(`"${helperPath}" "${params.subject.replace(/"/g, '\\"')}"`, { timeout: 10000 });
-          return { success: true, searchOpened: true };
-        } catch (helperErr) {
-          console.warn('[openMailInEmClient] Swift helper failed:', (helperErr as Error).message);
-        }
+      const escaped = params.subject.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      let cmd = `"${helperPath}" "${escaped}"`;
+      if (params.fromAddress) {
+        const escFrom = params.fromAddress.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        cmd += ` --from "${escFrom}"`;
       }
-
-      // Search dialog is open, clipboard has the subject
+      execSync(cmd, { timeout: 15000 });
       return { success: true, searchOpened: true };
     } catch (err) {
-      // AppleScript failed — eM Client might not be installed or running
-      // But clipboard is already set, try to just open eM Client
-      try {
-        execSync('open -a "eM Client"', { timeout: 5000 });
-        return { success: true, searchOpened: false };
-      } catch {
-        return { success: false, error: err instanceof Error ? err.message : String(err) };
-      }
+      console.warn('[openMailInEmClient] helper failed:', (err as Error).message);
+      // Fallback: just open eM Client (clipboard already has subject)
+      try { execSync('open -a "eM Client"', { timeout: 5000 }); } catch { /* noop */ }
+      return { success: true, searchOpened: false };
     }
   });
 }
