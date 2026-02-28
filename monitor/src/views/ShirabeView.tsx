@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
-import type { ShirabeDigest, ShirabeUrgentItem, ShirabeThesisStatus, ShirabeRoutineProgress, MailNote, MailItem, ViewType } from '../types';
+import type { ShirabeDigest, ShirabeUrgentItem, ShirabeWeekEvent, ShirabeThesisStatus, ShirabeRoutineProgress, MailNote, MailItem, TaskItem, AppSettings, ViewType } from '../types';
 import { BUILTIN_TAGS } from '../types';
 import { useNoteService } from '../context/NoteServiceContext';
+import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { isObviousSpam } from '../utils/spamFilter';
 import { openInEmClient } from '../utils/openInEmClient';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
@@ -68,33 +69,82 @@ function categorizeNotes(notes: MailNote[]): NotesByAction {
   return result;
 }
 
-// Extract deadlines from note content
+// Deadline urgency levels
+type DeadlineUrgency = 'overdue' | 'today' | 'this_week' | 'upcoming';
+
 interface DeadlineItem {
   subject: string;
   deadline: string;
-  noteId: string;
+  deadlineDate: Date | null;
+  source: 'task' | 'note';
+  urgency: DeadlineUrgency;
 }
 
-function extractDeadlines(notes: MailNote[]): DeadlineItem[] {
+function getDeadlineUrgency(date: Date | null): DeadlineUrgency {
+  if (!date) return 'upcoming';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const target = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  const diffDays = Math.floor((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  if (diffDays < 0) return 'overdue';
+  if (diffDays === 0) return 'today';
+  if (diffDays <= 7) return 'this_week';
+  return 'upcoming';
+}
+
+function aggregateDeadlines(tasks: TaskItem[], notes: MailNote[]): DeadlineItem[] {
   const deadlines: DeadlineItem[] = [];
+
+  // Task deadlines (incomplete tasks with end dates)
+  for (const t of tasks) {
+    if (t.completed || !t.end) continue;
+    const endDate = new Date(t.end);
+    deadlines.push({
+      subject: t.summary,
+      deadline: endDate.toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }),
+      deadlineDate: endDate,
+      source: 'task',
+      urgency: getDeadlineUrgency(endDate),
+    });
+  }
+
+  // Note deadlines (from markdown ⚠️ 期限 section)
   for (const note of notes) {
     if (!note.content) continue;
-    // Look for ⚠️ 期限 section and extract lines
     const deadlineMatch = note.content.match(/## ⚠️\s*期限\s*\n([\s\S]*?)(?=\n##|\n*$)/);
     if (deadlineMatch) {
       const lines = deadlineMatch[1].split('\n').filter(l => l.trim().startsWith('-'));
       for (const line of lines) {
         const text = line.replace(/^[-*]\s*(\[[ x]\]\s*)?/, '').trim();
         if (text && !text.includes('なし') && !text.includes('省略')) {
+          // Try to parse date from text (e.g., "3/15 までに提出")
+          const dateMatch = text.match(/(\d{1,2})\/(\d{1,2})/);
+          let parsedDate: Date | null = null;
+          if (dateMatch) {
+            const year = new Date().getFullYear();
+            parsedDate = new Date(year, parseInt(dateMatch[1]) - 1, parseInt(dateMatch[2]));
+          }
           deadlines.push({
             subject: note.subject,
             deadline: text,
-            noteId: note.id,
+            deadlineDate: parsedDate,
+            source: 'note',
+            urgency: getDeadlineUrgency(parsedDate),
           });
         }
       }
     }
   }
+
+  // Sort: overdue first, then today, this_week, upcoming
+  const urgencyOrder: Record<DeadlineUrgency, number> = { overdue: 0, today: 1, this_week: 2, upcoming: 3 };
+  deadlines.sort((a, b) => {
+    const diff = urgencyOrder[a.urgency] - urgencyOrder[b.urgency];
+    if (diff !== 0) return diff;
+    if (a.deadlineDate && b.deadlineDate) return a.deadlineDate.getTime() - b.deadlineDate.getTime();
+    return 0;
+  });
+
   return deadlines;
 }
 
@@ -102,6 +152,8 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
   const [digest, setDigest] = useState<ShirabeDigest | null>(null);
   const [notes, setNotes] = useState<MailNote[]>([]);
   const [unreadMails, setUnreadMails] = useState<MailItem[]>([]);
+  const [allTasks, setAllTasks] = useState<TaskItem[]>([]);
+  const [settings, setSettings] = useState<AppSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const noteService = useNoteService();
@@ -112,7 +164,11 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
     try {
       const api = window.electronAPI;
 
-      const accounts = await api.getAccounts();
+      const [accounts, appSettings] = await Promise.all([
+        api.getAccounts(),
+        api.getSettings(),
+      ]);
+      setSettings(appSettings);
 
       // Load notes and other data in parallel
       const [allNotes, ...accountResults] = await Promise.all([
@@ -127,7 +183,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
       setNotes(allNotes);
 
       // Reassemble results from flat array
-      let tasks: Awaited<ReturnType<typeof api.getTasks>> = [];
+      let tasks: TaskItem[] = [];
       let events: Awaited<ReturnType<typeof api.getEvents>> = [];
       let unreadMails: Awaited<ReturnType<typeof api.getMails>> = [];
 
@@ -138,18 +194,22 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
         unreadMails = unreadMails.concat(accountResults[base + 2] as typeof unreadMails);
       }
 
+      setAllTasks(tasks);
+
       events.sort((a, b) => new Date(a.start).getTime() - new Date(b.start).getTime());
       // Filter out obvious spam by content analysis (not folder-based)
       unreadMails = unreadMails.filter(m => !isObviousSpam(m));
       unreadMails.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       setUnreadMails(unreadMails);
 
-      // Build urgent items from unread mails (top 5)
+      // Build urgent items from unread mails (top 5) with subject/fromAddress
       const urgent: ShirabeUrgentItem[] = unreadMails.slice(0, 5).map((m) => ({
         label: `${m.subject} — ${m.from?.displayName || m.from?.address || ''}`,
         source: 'mail' as const,
         sourceId: m.id,
         accountEmail: m.accountEmail,
+        subject: m.subject,
+        fromAddress: m.from?.address,
       }));
 
       // Add overdue tasks
@@ -160,16 +220,24 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
             label: `[期限超過] ${t.summary}`,
             source: 'task',
             accountEmail: t.accountEmail,
+            subject: t.summary,
           });
         }
       }
 
-      // Build week events
-      const weekEvents = events.slice(0, 10).map((e) => ({
-        date: new Date(e.start).toISOString(),
-        summary: e.summary,
-        preparation: e.location || undefined,
-      }));
+      // Build week events with ShirabeWeekEvent type
+      const todayStr = now.toISOString().slice(0, 10);
+      const weekEvents: ShirabeWeekEvent[] = events.slice(0, 10).map((e) => {
+        const startDate = new Date(e.start);
+        return {
+          date: startDate.toISOString(),
+          summary: e.summary,
+          location: e.location || undefined,
+          isAllDay: e.isAllDay,
+          isToday: startDate.toISOString().slice(0, 10) === todayStr,
+          preparation: e.location || undefined,
+        };
+      });
 
       // Routine progress (current month placeholder)
       const currentMonth = now.getMonth() + 1;
@@ -199,6 +267,9 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
     loadDigest();
   }, [loadDigest]);
 
+  // Auto-refresh based on settings (default 5 minutes)
+  useAutoRefresh(settings?.refreshIntervalMinutes ?? 5, loadDigest);
+
   if (loading) {
     return (
       <div className="p-6">
@@ -227,7 +298,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
   if (!digest) return null;
 
   const categorized = categorizeNotes(notes);
-  const deadlines = extractDeadlines(notes);
+  const deadlines = aggregateDeadlines(allTasks, notes);
   const actionableCount = categorized.urgent.length + categorized.reply.length + categorized.action.length;
   const totalNotes = notes.filter(n => n.content).length;
 
@@ -235,6 +306,39 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
   const thesisD = digest.thesis.filter((t) => t.category === 'D');
   const thesisM = digest.thesis.filter((t) => t.category === 'M');
   const thesisB = digest.thesis.filter((t) => t.category === 'B');
+
+  // Today's events and top actionable items for focus section
+  const todayEvents = digest.weekEvents.filter(ev => ev.isToday);
+  const topActionable = [...categorized.urgent, ...categorized.reply, ...categorized.action].slice(0, 3);
+  const showTodayFocus = todayEvents.length > 0 || topActionable.length > 0;
+
+  // Urgency badge helper
+  const urgencyBadge = (urgency: DeadlineUrgency) => {
+    switch (urgency) {
+      case 'overdue': return { label: '超過', cls: 'bg-red-500/20 text-red-400 border-red-500/30' };
+      case 'today': return { label: '今日', cls: 'bg-amber-500/20 text-amber-400 border-amber-500/30' };
+      case 'this_week': return { label: '今週', cls: 'bg-surface-700 text-surface-400 border-surface-600' };
+      case 'upcoming': return { label: '今後', cls: 'bg-surface-700 text-surface-400 border-surface-600' };
+    }
+  };
+
+  // Format time for events
+  const formatTime = (iso: string, isAllDay: boolean) => {
+    if (isAllDay) return '終日';
+    const d = new Date(iso);
+    return `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
+  };
+
+  // Count grid sections to determine layout
+  const sectionCount = [
+    true,  // action required
+    true,  // week schedule
+    true,  // deadlines
+    true,  // unread mails
+    true,  // note analysis
+    hasThesisData, // 校務 (only if thesis data)
+  ].filter(Boolean).length;
+  const noteAnalysisSpan = sectionCount % 2 !== 0 ? 'col-span-2' : '';
 
   return (
     <div className="h-full overflow-y-auto p-6">
@@ -295,6 +399,71 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
         </div>
       </div>
 
+      {/* Today's Focus (only if there are today events or actionable items) */}
+      {showTodayFocus && (
+        <section className="mb-4 bg-blue-500/5 rounded-lg border border-blue-500/20 p-4">
+          <h2 className="text-sm font-medium text-blue-400 mb-3 flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-blue-500" />
+            今日のフォーカス
+          </h2>
+          <div className="grid grid-cols-2 gap-4">
+            {/* Today's events */}
+            <div>
+              <h3 className="text-xs text-surface-500 mb-1.5 font-medium">今日の予定 ({todayEvents.length})</h3>
+              {todayEvents.length === 0 ? (
+                <p className="text-xs text-surface-600">予定なし</p>
+              ) : (
+                <ul className="space-y-1">
+                  {todayEvents.map((ev, i) => (
+                    <li key={i} className="text-sm text-surface-300 flex items-start gap-2">
+                      <span className="text-blue-400 font-mono text-xs flex-shrink-0 mt-0.5 w-10 text-right">
+                        {formatTime(ev.date, ev.isAllDay)}
+                      </span>
+                      <div className="min-w-0">
+                        <span className="line-clamp-1">{ev.summary}</span>
+                        {ev.location && (
+                          <span className="text-[10px] text-surface-500 block line-clamp-1">{ev.location}</span>
+                        )}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            {/* Top actionable */}
+            <div>
+              <h3 className="text-xs text-surface-500 mb-1.5 font-medium">要対応 TOP3</h3>
+              {topActionable.length === 0 ? (
+                <p className="text-xs text-surface-600">対応不要</p>
+              ) : (
+                <ul className="space-y-1">
+                  {topActionable.map((note, i) => {
+                    const tags = note.tags ?? (note.quickLabel ? [note.quickLabel] : []);
+                    const primaryTag = tags[0];
+                    const tagInfo = primaryTag ? getTagInfo(primaryTag) : null;
+                    return (
+                      <li
+                        key={i}
+                        className="flex items-start gap-1.5 text-sm cursor-pointer hover:bg-surface-800/30 rounded px-1 py-0.5 -mx-1 transition-colors"
+                        onClick={() => openInEmClient({ subject: note.subject })}
+                        title="クリックでeM Clientで開く"
+                      >
+                        {tagInfo && (
+                          <span className={`text-[9px] px-1 py-px rounded border flex-shrink-0 mt-0.5 ${tagInfo.bg} ${tagInfo.text} ${tagInfo.border}`}>
+                            {tagInfo.label}
+                          </span>
+                        )}
+                        <span className="text-surface-300 line-clamp-1">{note.subject}</span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
+
       {/* Grid layout */}
       <div className="grid grid-cols-2 gap-4">
         {/* Action required notes (from tags) */}
@@ -348,7 +517,7 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           </button>
         </section>
 
-        {/* Week schedule */}
+        {/* Week schedule (enhanced with time/location/today highlight) */}
         <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
           <h2 className="text-sm font-medium text-blue-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-blue-500" />
@@ -357,13 +526,32 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           {digest.weekEvents.length === 0 ? (
             <p className="text-sm text-surface-500">今週の予定なし</p>
           ) : (
-            <ul className="space-y-1.5">
+            <ul className="space-y-1">
               {digest.weekEvents.map((ev, i) => (
-                <li key={i} className="text-sm text-surface-300 flex items-start gap-2">
-                  <span className="text-surface-500 flex-shrink-0 w-12 text-right font-mono text-xs mt-0.5">
-                    {formatDate(ev.date)}({formatWeekday(ev.date)})
-                  </span>
-                  <span className="line-clamp-1">{ev.summary}</span>
+                <li
+                  key={i}
+                  className={`text-sm flex items-start gap-2 rounded px-1.5 py-1 -mx-1.5 ${
+                    ev.isToday
+                      ? 'bg-blue-500/10 border-l-2 border-blue-500'
+                      : ''
+                  }`}
+                >
+                  <div className="flex-shrink-0 w-20 text-right">
+                    <span className="text-surface-500 font-mono text-xs">
+                      {formatDate(ev.date)}({formatWeekday(ev.date)})
+                    </span>
+                    <span className="text-surface-600 font-mono text-[10px] block">
+                      {formatTime(ev.date, ev.isAllDay)}
+                    </span>
+                  </div>
+                  <div className="min-w-0">
+                    <span className={`line-clamp-1 ${ev.isToday ? 'text-blue-300' : 'text-surface-300'}`}>
+                      {ev.summary}
+                    </span>
+                    {ev.location && (
+                      <span className="text-[10px] text-surface-500 block line-clamp-1">{ev.location}</span>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
@@ -376,36 +564,47 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           </button>
         </section>
 
-        {/* Deadlines (extracted from notes) */}
+        {/* Deadlines (integrated: tasks + notes) */}
         <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
           <h2 className="text-sm font-medium text-amber-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-amber-500" />
             期限・締切 ({deadlines.length})
           </h2>
           {deadlines.length === 0 ? (
-            <p className="text-sm text-surface-500">抽出された期限なし</p>
+            <p className="text-sm text-surface-500">期限なし</p>
           ) : (
-            <ul className="space-y-2">
-              {deadlines.slice(0, 6).map((dl, i) => (
-                <li key={i} className="text-sm">
-                  <div className="text-surface-300 line-clamp-1">{dl.deadline}</div>
-                  <div className="text-[10px] text-surface-500 mt-0.5 line-clamp-1">{dl.subject}</div>
-                </li>
-              ))}
-              {deadlines.length > 6 && (
-                <li className="text-xs text-surface-500">...他 {deadlines.length - 6} 件</li>
+            <ul className="space-y-1.5">
+              {deadlines.slice(0, 8).map((dl, i) => {
+                const badge = urgencyBadge(dl.urgency);
+                return (
+                  <li key={i} className="text-sm flex items-start gap-2">
+                    <span className={`text-[9px] px-1.5 py-px rounded border flex-shrink-0 mt-0.5 ${badge.cls}`}>
+                      {badge.label}
+                    </span>
+                    <span className="text-surface-500 flex-shrink-0 mt-0.5 text-xs">
+                      {dl.source === 'task' ? '\u2713' : '\uD83D\uDCDD'}
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-surface-300 line-clamp-1">{dl.deadline}</div>
+                      <div className="text-[10px] text-surface-500 line-clamp-1">{dl.subject}</div>
+                    </div>
+                  </li>
+                );
+              })}
+              {deadlines.length > 8 && (
+                <li className="text-xs text-surface-500 pl-1">...他 {deadlines.length - 8} 件</li>
               )}
             </ul>
           )}
           <button
-            onClick={() => onNavigate('mail')}
+            onClick={() => onNavigate('task')}
             className="mt-3 text-xs text-accent-400 hover:text-accent-300"
           >
-            メール確認 →
+            タスク確認 →
           </button>
         </section>
 
-        {/* Unread mails */}
+        {/* Unread mails (with fixed eM Client integration) */}
         <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
           <h2 className="text-sm font-medium text-sky-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-sky-500" />
@@ -420,9 +619,10 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
                   key={i}
                   className="text-sm text-surface-300 line-clamp-1 cursor-pointer hover:bg-surface-800/50 rounded px-1 py-0.5 -mx-1 transition-colors"
                   onClick={() => {
-                    // Extract subject from label (format: "subject — sender")
-                    const subject = item.label.split(' — ')[0];
-                    openInEmClient({ subject });
+                    openInEmClient({
+                      subject: item.subject ?? item.label.split(' \u2014 ')[0],
+                      fromAddress: item.fromAddress,
+                    });
                   }}
                   title="クリックでeM Clientで開く"
                 >
@@ -439,8 +639,8 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           </button>
         </section>
 
-        {/* Note analysis summary */}
-        <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
+        {/* Note analysis summary (may span 2 cols if grid is odd) */}
+        <section className={`bg-surface-900 rounded-lg border border-surface-700/50 p-4 ${noteAnalysisSpan}`}>
           <h2 className="text-sm font-medium text-emerald-400 mb-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500" />
             分析ノート概況
@@ -474,15 +674,13 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           )}
         </section>
 
-        {/* 校務 (Administrative duties including thesis reviews) */}
-        <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
-          <h2 className="text-sm font-medium text-violet-400 mb-3 flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-violet-500" />
-            校務
-          </h2>
-
-          {/* Thesis sub-section */}
-          {hasThesisData && (
+        {/* 校務 — only show when thesis data exists */}
+        {hasThesisData && (
+          <section className="bg-surface-900 rounded-lg border border-surface-700/50 p-4">
+            <h2 className="text-sm font-medium text-violet-400 mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-violet-500" />
+              校務
+            </h2>
             <div className="mb-3">
               <h3 className="text-xs text-surface-500 mb-1.5 font-medium">学位審査</h3>
               <div className="space-y-2 pl-1">
@@ -525,42 +723,22 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
                 )}
               </div>
             </div>
-          )}
-
-          {/* Overdue tasks from eM Client */}
-          {digest.urgent.filter(u => u.source === 'task').length > 0 && (
-            <div className="mb-3">
-              <h3 className="text-xs text-surface-500 mb-1.5 font-medium">期限超過タスク</h3>
-              <ul className="space-y-1 pl-1">
-                {digest.urgent.filter(u => u.source === 'task').map((item, i) => (
-                  <li key={i} className="text-sm text-red-400 line-clamp-1">
-                    {item.label}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {/* Placeholder for future items */}
-          {!hasThesisData && digest.urgent.filter(u => u.source === 'task').length === 0 && (
-            <p className="text-sm text-surface-500">校務データなし</p>
-          )}
-
-          <button
-            onClick={() => {
-              window.electronAPI.ptyCreate().then(() => {
-                window.electronAPI.ptyWrite('/routine-checker\n');
-                onNavigate('chat');
-              });
-            }}
-            className="mt-3 text-xs text-accent-400 hover:text-accent-300"
-          >
-            ルーティンチェック →
-          </button>
-        </section>
+            <button
+              onClick={() => {
+                window.electronAPI.ptyCreate().then(() => {
+                  window.electronAPI.ptyWrite('/routine-checker\n');
+                  onNavigate('chat');
+                });
+              }}
+              className="mt-3 text-xs text-accent-400 hover:text-accent-300"
+            >
+              ルーティンチェック →
+            </button>
+          </section>
+        )}
       </div>
 
-      {/* Quick actions */}
+      {/* Quick actions (3 buttons: batch analysis, /shirabe, mail) */}
       <div className="mt-6 flex gap-3 flex-wrap">
         <button
           onClick={() => {
@@ -587,15 +765,6 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
         </button>
         <button
           onClick={() => {
-            // Refresh notes after batch analysis
-            loadDigest();
-          }}
-          className="px-4 py-2 bg-surface-800 hover:bg-surface-700 border border-surface-700/50 rounded-lg text-sm text-surface-300 transition-colors"
-        >
-          データ更新
-        </button>
-        <button
-          onClick={() => {
             window.electronAPI.ptyCreate().then(() => {
               window.electronAPI.ptyWrite('/shirabe\n');
               onNavigate('chat');
@@ -604,17 +773,6 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           className="px-4 py-2 bg-accent-500/20 hover:bg-accent-500/30 border border-accent-500/30 rounded-lg text-sm text-accent-400 transition-colors"
         >
           /shirabe を実行
-        </button>
-        <button
-          onClick={() => {
-            window.electronAPI.ptyCreate().then(() => {
-              window.electronAPI.ptyWrite('/daily-briefing\n');
-              onNavigate('chat');
-            });
-          }}
-          className="px-4 py-2 bg-surface-800 hover:bg-surface-700 border border-surface-700/50 rounded-lg text-sm text-surface-300 transition-colors"
-        >
-          ブリーフィング
         </button>
         <button
           onClick={() => onNavigate('mail')}

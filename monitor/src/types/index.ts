@@ -280,6 +280,17 @@ export interface ShirabeUrgentItem {
   source: 'mail' | 'calendar' | 'task' | 'deadline';
   sourceId?: number;
   accountEmail?: string;
+  subject?: string;
+  fromAddress?: string;
+}
+
+export interface ShirabeWeekEvent {
+  date: string;
+  summary: string;
+  location?: string;
+  isAllDay: boolean;
+  isToday: boolean;
+  preparation?: string;
 }
 
 export interface ShirabeThesisStatus {
@@ -300,7 +311,7 @@ export interface ShirabeRoutineProgress {
 export interface ShirabeDigest {
   date: string;
   urgent: ShirabeUrgentItem[];
-  weekEvents: { date: string; summary: string; preparation?: string }[];
+  weekEvents: ShirabeWeekEvent[];
   thesis: ShirabeThesisStatus[];
   routine: ShirabeRoutineProgress;
   lastUpdated: string;
