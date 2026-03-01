@@ -101,7 +101,7 @@ ${existingSection}
 - 暗示された期限
 
 ## 判定
-[不要 / 要返信 / 個別対応 / 保留 / 対応済] — 理由を1文で
+【至急 / 要返信 / 要対応 / 情報 / 不要 / 保留 / 対応済】のいずれか1つを選び、理由を1文で
 
 ## メモ
 - 背景情報や注意点`;
@@ -144,21 +144,41 @@ ${mail.conversationId ? `会話ID: ${mail.conversationId}` : ''}
 replace_content: true で全体を置き換え。`;
 }
 
-function extractLabel(markdown: string): QuickLabel | undefined {
-  const m = markdown.match(/## 判定\s*\n\s*\*?\*?\s*【?\s*(至急|要返信|要対応|個別対応|情報|不要|保留|対応済)/);
-  if (!m) {
-    const m2 = markdown.match(/## 判定\s*\n\s*\[?\s*(不要|要返信|個別対応|保留|対応済)/);
-    if (m2) {
-      const map: Record<string, QuickLabel> = { '不要': 'unnecessary', '要返信': 'reply', '個別対応': 'action', '保留': 'hold', '対応済': 'done' };
-      return map[m2[1]];
-    }
-    return undefined;
+interface ExtractedLabelResult {
+  quickLabel?: QuickLabel;
+  tags: string[];
+}
+
+function extractLabelAndTags(markdown: string): ExtractedLabelResult {
+  // Try multiple patterns to find the label
+  const patterns = [
+    /## 判定\s*\n+\s*\*{0,2}\s*【?\s*(至急|要返信|要対応|個別対応|情報|不要|保留|対応済)/,
+    /## 判定\s*\n+\s*\[?\s*(至急|要返信|要対応|個別対応|情報|不要|保留|対応済)/,
+    /## 判定\s*\n+\s*[-*]?\s*\*{0,2}\s*(至急|要返信|要対応|個別対応|情報|不要|保留|対応済)/,
+    /判定[：:]\s*\*{0,2}\s*【?\s*(至急|要返信|要対応|個別対応|情報|不要|保留|対応済)/,
+  ];
+
+  let detected: string | undefined;
+  for (const pat of patterns) {
+    const m = markdown.match(pat);
+    if (m) { detected = m[1]; break; }
   }
-  const map: Record<string, QuickLabel> = {
-    '至急': 'action', '要返信': 'reply', '要対応': 'action', '個別対応': 'action',
-    '情報': 'done', '不要': 'unnecessary', '保留': 'hold', '対応済': 'done',
+
+  if (!detected) return { tags: [] };
+
+  // Map Japanese label → quickLabel + tags
+  const labelMap: Record<string, { quickLabel: QuickLabel; tags: string[] }> = {
+    '至急':     { quickLabel: 'action', tags: ['urgent', 'action'] },
+    '要返信':   { quickLabel: 'reply',  tags: ['reply'] },
+    '要対応':   { quickLabel: 'action', tags: ['action'] },
+    '個別対応': { quickLabel: 'action', tags: ['action'] },
+    '情報':     { quickLabel: 'done',   tags: ['info'] },
+    '不要':     { quickLabel: 'unnecessary', tags: ['unnecessary'] },
+    '保留':     { quickLabel: 'hold',   tags: ['hold'] },
+    '対応済':   { quickLabel: 'done',   tags: ['done'] },
   };
-  return map[m[1]];
+
+  return labelMap[detected] ?? { tags: [] };
 }
 
 // ─── Context ──────────────────────────────────────────────
@@ -193,58 +213,81 @@ export function NoteServiceProvider({ children }: { children: ReactNode }) {
     };
     setTasks(prev => new Map(prev).set(noteId, task));
 
-    // Build prompt
-    const prompt = mode === 'deep'
-      ? buildDeepPrompt(mail)
-      : buildLightPrompt(mail, threadMessages, existingNote);
+    // Auto-fetch thread messages if none provided (light mode only)
+    const resolveThreadMessages = async (): Promise<ThreadMessage[]> => {
+      if (threadMessages.length > 0) return threadMessages;
+      if (mode === 'deep') return []; // Deep mode uses MCP tools
+      try {
+        return await window.electronAPI.getThreadMessages(mail.id, mail.accountEmail);
+      } catch {
+        return []; // Fall back to preview-only
+      }
+    };
 
     // Fire and forget — survives component unmounts
-    window.electronAPI.runClaudeAnalysis(prompt, { mode })
-      .then(async (result) => {
-        if (mode === 'deep') {
-          // Deep mode: MCP may have saved directly
-          const reloaded = await window.electronAPI.getNote(noteId);
-          if (reloaded) return; // MCP saved it
-        }
+    resolveThreadMessages()
+      .then((msgs) => {
+        const prompt = mode === 'deep'
+          ? buildDeepPrompt(mail)
+          : buildLightPrompt(mail, msgs, existingNote);
 
-        if (result.status === 'done' && result.markdown) {
-          const now = new Date().toISOString();
-          const threadCount = threadMessages?.length ?? 1;
-          const detectedLabel = extractLabel(result.markdown);
+        return window.electronAPI.runClaudeAnalysis(prompt, { mode })
+          .then(async (result) => {
+            if (mode === 'deep') {
+              // Deep mode: MCP may have saved directly
+              const reloaded = await window.electronAPI.getNote(noteId);
+              if (reloaded) return; // MCP saved it
+            }
 
-          if (existingNote) {
-            const updated: MailNote = {
-              ...existingNote,
-              content: result.markdown,
-              quickLabel: detectedLabel || existingNote.quickLabel,
-              threadMessageCount: threadCount,
-              updatedAt: now,
-              history: [
-                ...existingNote.history,
-                { timestamp: now, type: 'ai_proposal', content: `${mode === 'deep' ? '深層' : ''}生成（${threadCount}通）: ${result.markdown.slice(0, 80)}` },
-              ],
-            };
-            await window.electronAPI.saveNote(updated);
-          } else {
-            const newNote: MailNote = {
-              id: noteId,
-              mailId: mail.id,
-              accountEmail: mail.accountEmail,
-              subject: mail.subject,
-              content: result.markdown,
-              todos: [],
-              quickLabel: detectedLabel,
-              threadMessageCount: threadCount,
-              history: [
-                { timestamp: now, type: 'created', content: 'ノート作成' },
-                { timestamp: now, type: 'ai_proposal', content: `AI生成（${threadCount}通）: ${result.markdown.slice(0, 80)}` },
-              ],
-              createdAt: now,
-              updatedAt: now,
-            };
-            await window.electronAPI.saveNote(newNote);
-          }
-        }
+            if (result.status === 'done' && result.markdown) {
+              const now = new Date().toISOString();
+              const threadCount = msgs.length || 1;
+              const { quickLabel: detectedLabel, tags: detectedTags } = extractLabelAndTags(result.markdown);
+
+              if (existingNote) {
+                const updated: MailNote = {
+                  ...existingNote,
+                  content: result.markdown,
+                  quickLabel: detectedLabel || existingNote.quickLabel,
+                  tags: detectedTags.length > 0 ? detectedTags : existingNote.tags,
+                  threadMessageCount: threadCount,
+                  updatedAt: now,
+                  history: [
+                    ...existingNote.history,
+                    { timestamp: now, type: 'ai_proposal', content: `${mode === 'deep' ? '深層' : ''}生成（${threadCount}通）: ${result.markdown.slice(0, 80)}` },
+                  ],
+                };
+                await window.electronAPI.saveNote(updated);
+              } else {
+                const newNote: MailNote = {
+                  id: noteId,
+                  mailId: mail.id,
+                  accountEmail: mail.accountEmail,
+                  subject: mail.subject,
+                  content: result.markdown,
+                  todos: [],
+                  quickLabel: detectedLabel,
+                  tags: detectedTags.length > 0 ? detectedTags : undefined,
+                  threadMessageCount: threadCount,
+                  history: [
+                    { timestamp: now, type: 'created', content: 'ノート作成' },
+                    { timestamp: now, type: 'ai_proposal', content: `AI生成（${threadCount}通）: ${result.markdown.slice(0, 80)}` },
+                  ],
+                  createdAt: now,
+                  updatedAt: now,
+                };
+                await window.electronAPI.saveNote(newNote);
+              }
+            } else if (result.status === 'error') {
+              console.error(`[NoteService] Analysis returned error for ${noteId}:`, result.errorMessage);
+              setTasks(prev => {
+                const next = new Map(prev);
+                const t = next.get(noteId);
+                if (t) next.set(noteId, { ...t, status: 'error' });
+                return next;
+              });
+            }
+          });
       })
       .catch((err) => {
         console.error(`[NoteService] Error generating note ${noteId}:`, err);
