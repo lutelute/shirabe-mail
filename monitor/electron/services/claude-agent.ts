@@ -34,7 +34,11 @@ function releaseSession(): void {
 }
 
 // --- Shared query options ---
-function baseOptions(apiKey: string, maxBudgetUsd?: number): Options {
+function baseOptions(
+  apiKey: string,
+  maxBudgetUsd?: number,
+  abortController?: AbortController,
+): Options {
   return {
     tools: ['Skill', 'Task', 'Read', 'Glob', 'Grep'],
     allowedTools: ['Skill', 'Task', 'Read', 'Glob', 'Grep'],
@@ -44,7 +48,18 @@ function baseOptions(apiKey: string, maxBudgetUsd?: number): Options {
     env: { ...process.env, ANTHROPIC_API_KEY: apiKey },
     maxBudgetUsd,
     persistSession: false,
+    // When provided, aborting this controller stops the underlying SDK
+    // query (and its subprocess) — wired from main's cancelOperation.
+    abortController,
   };
+}
+
+// Error message surfaced when an operation is cancelled via cancelOperation.
+export const OPERATION_CANCELLED_ERROR = '操作はキャンセルされました。';
+
+function isCancellation(err: unknown, abortController?: AbortController): boolean {
+  if (abortController?.signal.aborted) return true;
+  return err instanceof Error && err.name === 'AbortError';
 }
 
 // --- Extract result and cost from SDK message stream ---
@@ -102,6 +117,7 @@ function parseJsonObject<T>(text: string): T | null {
 export async function triageEmails(
   mails: MailItem[],
   apiKey: string,
+  abortController?: AbortController,
 ): Promise<{ results: TriageResult[]; costUsd: number; error: string | null }> {
   if (!apiKey) {
     return {
@@ -122,6 +138,10 @@ export async function triageEmails(
 
     // Process in batches of 10
     for (let i = 0; i < mails.length; i += 10) {
+      // Stop between batches if the operation was cancelled.
+      if (abortController?.signal.aborted) {
+        return { results, costUsd: totalCost, error: OPERATION_CANCELLED_ERROR };
+      }
       const batch = mails.slice(i, i + 10);
       const mailData = batch.map((m) => ({
         id: m.id,
@@ -156,7 +176,7 @@ Include ALL emails in the result. Output ONLY valid JSON, no other text.`;
 
       const messages = query({
         prompt,
-        options: baseOptions(apiKey),
+        options: baseOptions(apiKey, undefined, abortController),
       });
 
       const { result, costUsd, isError } = await collectResult(messages);
@@ -188,6 +208,9 @@ Include ALL emails in the result. Output ONLY valid JSON, no other text.`;
 
     return { results, costUsd: totalCost, error: null };
   } catch (err) {
+    if (isCancellation(err, abortController)) {
+      return { results: [], costUsd: 0, error: OPERATION_CANCELLED_ERROR };
+    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     if (errorMsg.includes('401') || errorMsg.includes('authentication') || errorMsg.includes('invalid')) {
       return {
@@ -206,6 +229,7 @@ Include ALL emails in the result. Output ONLY valid JSON, no other text.`;
 export async function extractTodosFromThread(
   threadMessages: ThreadMessage[],
   apiKey: string,
+  abortController?: AbortController,
 ): Promise<{ results: TodoItem[]; costUsd: number; error: string | null }> {
   if (!apiKey) {
     return {
@@ -257,7 +281,7 @@ Return [] if no personal action items found. Output ONLY valid JSON, no other te
 
     const messages = query({
       prompt,
-      options: baseOptions(apiKey),
+      options: baseOptions(apiKey, undefined, abortController),
     });
 
     const { result, costUsd, isError } = await collectResult(messages);
@@ -298,6 +322,9 @@ Return [] if no personal action items found. Output ONLY valid JSON, no other te
 
     return { results, costUsd, error: null };
   } catch (err) {
+    if (isCancellation(err, abortController)) {
+      return { results: [], costUsd: 0, error: OPERATION_CANCELLED_ERROR };
+    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     if (errorMsg.includes('401') || errorMsg.includes('authentication') || errorMsg.includes('invalid')) {
       return {
@@ -316,6 +343,7 @@ Return [] if no personal action items found. Output ONLY valid JSON, no other te
 export async function runHistoricalAudit(
   params: AuditParams,
   onProgress: (progress: AuditScanProgress) => void,
+  abortController?: AbortController,
 ): Promise<{ result: AuditResult | null; costUsd: number; error: string | null }> {
   const { apiKey, accountEmail, startDate, endDate, topic } = params;
 
@@ -374,7 +402,7 @@ Return ONLY a JSON object with this format:
 Output ONLY valid JSON, no other text.`;
 
     // Use maxBudgetUsd for expensive historical operations
-    const options = baseOptions(apiKey, params.apiKey ? 5.0 : undefined);
+    const options = baseOptions(apiKey, params.apiKey ? 5.0 : undefined, abortController);
 
     const messages = query({ prompt, options });
 
@@ -448,6 +476,9 @@ Output ONLY valid JSON, no other text.`;
 
     return { result: auditResult, costUsd: totalCost, error: null };
   } catch (err) {
+    if (isCancellation(err, abortController)) {
+      return { result: null, costUsd: 0, error: OPERATION_CANCELLED_ERROR };
+    }
     const errorMsg = err instanceof Error ? err.message : String(err);
     if (errorMsg.includes('401') || errorMsg.includes('authentication') || errorMsg.includes('invalid')) {
       return {

@@ -5,6 +5,18 @@
     "moduleResolution": "bundler",
     "outDir": "build",
     "rootDir": "src",
+    "baseUrl": ".",
+    "paths": {
+      // @modelcontextprotocol/sdk 1.26.0 ships the ESM runtime
+      // (dist/esm/server/mcp.js) but forgot the matching mcp.d.ts, so TS infers
+      // `any` for McpServer and cascades type errors through index.ts. Redirect
+      // type resolution to the CJS .d.ts the package *does* ship. Type-check
+      // only — runtime import resolution is unaffected. Remove once the SDK
+      // ships the ESM declaration again.
+      "@modelcontextprotocol/sdk/server/mcp.js": [
+        "./node_modules/@modelcontextprotocol/sdk/dist/cjs/server/mcp.d.ts"
+      ]
+    },
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

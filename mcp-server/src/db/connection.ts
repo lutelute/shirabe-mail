@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -10,6 +11,9 @@ const DB_BASE = path.join(
   'eM Client',
 );
 const TMP_BASE = '/tmp/emclient_mcp';
+
+/** Time (ms) to wait for a SQLite lock before giving up on write operations. */
+const WRITE_BUSY_TIMEOUT_MS = 5000;
 
 /**
  * Open eM Client DB for reading.
@@ -96,8 +100,96 @@ export function openDbSync(
 }
 
 /**
+ * Resolve the absolute path of an eM Client DB file without opening it.
+ */
+export function resolveDbPath(
+  accountUid: string,
+  subdir: string,
+  dbName: string,
+): string {
+  return path.join(DB_BASE, accountUid, subdir, dbName);
+}
+
+/**
+ * Check whether eM Client is currently running on macOS.
+ *
+ * Writing to the live DB while the app is running races against eM Client's
+ * sync engine and can be silently rolled back (or corrupt the WAL), so callers
+ * should refuse to write when this returns true.
+ *
+ * The app bundle executable is literally named "eM Client" (with a space), so
+ * the full process command line contains "eM Client.app/Contents/MacOS/eM Client".
+ * We match against that to avoid false positives from this MCP server itself.
+ */
+export function isEmClientRunning(): boolean {
+  try {
+    // pgrep -f matches against the full argv; the .app path is stable.
+    // Exit code 0 = at least one match, 1 = no match, >1 = error.
+    execFileSync('pgrep', ['-f', 'eM Client.app/Contents/MacOS/eM Client'], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    });
+    return true;
+  } catch (err) {
+    const code = (err as { status?: number }).status;
+    if (code === 1) return false; // no matching process
+    // pgrep missing or errored — try a coarser fallback before giving up.
+    try {
+      execFileSync('pgrep', ['-x', 'eM Client'], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+      return true;
+    } catch (err2) {
+      if ((err2 as { status?: number }).status === 1) return false;
+      // Unable to determine — assume NOT running so we don't block legitimate
+      // use on systems without pgrep. (Backup + transaction still protect data.)
+      return false;
+    }
+  }
+}
+
+/**
+ * Make a timestamped backup copy of a DB file before a destructive write.
+ *
+ * Tries `VACUUM INTO` first (atomic, compacted, WAL-inclusive snapshot); falls
+ * back to a plain file copy (incl. -wal/-shm) if that fails. Returns the path
+ * of the backup so callers can surface it for manual recovery.
+ */
+export function backupDbFile(srcPath: string): string {
+  if (!fs.existsSync(srcPath)) {
+    throw new Error(`Cannot back up — DB not found: ${srcPath}`);
+  }
+  const stamp = Math.floor(Date.now() / 1000);
+  const backupPath = `${srcPath}.shirabe-backup-${stamp}`;
+
+  // Strategy 1: VACUUM INTO — atomic & consistent, includes WAL data.
+  try {
+    const srcDb = new Database(srcPath, { readonly: true, fileMustExist: true });
+    try {
+      srcDb.exec(`VACUUM INTO '${backupPath.replace(/'/g, "''")}'`);
+    } finally {
+      srcDb.close();
+    }
+    return backupPath;
+  } catch {
+    // VACUUM INTO may fail (locked exclusively, disk, etc.) — fall back.
+  }
+
+  // Strategy 2: plain file copy of DB + WAL + SHM sidecars.
+  fs.copyFileSync(srcPath, backupPath);
+  for (const suffix of ['-wal', '-shm']) {
+    if (fs.existsSync(srcPath + suffix)) {
+      fs.copyFileSync(srcPath + suffix, backupPath + suffix);
+    }
+  }
+  return backupPath;
+}
+
+/**
  * Open the ORIGINAL eM Client DB in read-write mode.
  * Use with extreme care — only for operations like move-to-trash.
+ *
+ * Sets a busy_timeout so transient locks from eM Client's own access don't
+ * immediately fail the write.
  */
 export function openDbForWrite(
   accountUid: string,
@@ -108,5 +200,7 @@ export function openDbForWrite(
   if (!fs.existsSync(srcPath)) {
     throw new Error(`DB not found: ${srcPath}`);
   }
-  return new Database(srcPath, { readonly: false, fileMustExist: true });
+  const db = new Database(srcPath, { readonly: false, fileMustExist: true });
+  db.pragma(`busy_timeout = ${WRITE_BUSY_TIMEOUT_MS}`);
+  return db;
 }

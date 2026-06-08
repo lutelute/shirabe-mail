@@ -3,6 +3,10 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import * as fs from 'fs';
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import * as path from 'path';
 
 import { getAccounts } from './tools/get-accounts.js';
 import { getUnreadMails } from './tools/get-unread-mails.js';
@@ -21,11 +25,28 @@ import { moveToTrash } from './tools/move-to-trash.js';
 import { copyMailToFolder } from './tools/copy-mail-to-folder.js';
 import { getSentMails } from './tools/get-sent-mails.js';
 import { getDeadlineItems } from './tools/get-deadline-items.js';
-import { ensureNotesDir, findNotePath } from './utils.js';
+import { ensureNotesDir, findNotePath, getConversationId } from './utils.js';
+
+/** Valid note tag IDs (kept in sync with the GUI's tag set). */
+const TAG_IDS = ['reply', 'action', 'hold', 'done', 'unnecessary', 'info', 'urgent'] as const;
+const TagSchema = z.enum(TAG_IDS);
+
+/** Read the package version so the MCP server advertises its real version. */
+function readPackageVersion(): string {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // build/index.js -> ../package.json ; src/index.ts -> ../package.json
+    const pkgPath = path.join(here, '..', 'package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')) as { version?: string };
+    return pkg.version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
 
 const server = new McpServer({
   name: 'shirabe',
-  version: '1.0.0',
+  version: readPackageVersion(),
 });
 
 // --- get_accounts ---
@@ -384,13 +405,13 @@ server.tool(
   {
     mail_id: z.number().int().describe('The mail ID'),
     account: z.string().describe('The account email address'),
-    add_tags: z.array(z.string()).optional().describe('Tag IDs to add'),
-    remove_tags: z.array(z.string()).optional().describe('Tag IDs to remove'),
+    add_tags: z.array(TagSchema).optional().describe('Tag IDs to add'),
+    remove_tags: z.array(TagSchema).optional().describe('Tag IDs to remove'),
   },
   async (params) => {
-    const fs = await import('fs');
-    const notesDir = ensureNotesDir();
-    const found = findNotePath(params.mail_id);
+    ensureNotesDir();
+    const conversationId = getConversationId(params.mail_id, params.account);
+    const found = findNotePath(params.mail_id, conversationId);
     const now = new Date().toISOString();
 
     let note: Record<string, unknown>;
@@ -416,7 +437,8 @@ server.tool(
       tags = [...new Set([...tags, ...params.add_tags])];
     }
     if (params.remove_tags) {
-      tags = tags.filter(t => !params.remove_tags!.includes(t));
+      const toRemove = new Set<string>(params.remove_tags);
+      tags = tags.filter((t) => !toRemove.has(t));
     }
     note.tags = tags;
     note.updatedAt = now;
@@ -438,8 +460,8 @@ server.tool(
     account: z.string().describe('The account email address'),
   },
   async (params) => {
-    const fs = await import('fs');
-    const found = findNotePath(params.mail_id);
+    const conversationId = getConversationId(params.mail_id, params.account);
+    const found = findNotePath(params.mail_id, conversationId);
 
     if (!found.exists) {
       return {
@@ -465,8 +487,8 @@ server.tool(
     account: z.string().describe('The account email address'),
   },
   async (params) => {
-    const fs = await import('fs');
-    const found = findNotePath(params.mail_id);
+    const conversationId = getConversationId(params.mail_id, params.account);
+    const found = findNotePath(params.mail_id, conversationId);
 
     if (!found.exists) {
       return {
@@ -491,13 +513,13 @@ server.tool(
     subject: z.string().optional().describe('Mail subject (used when creating new note)'),
     content: z.string().describe('Markdown content for the note (analysis results, summary, etc.)'),
     todos: z.array(z.string()).optional().describe('Array of todo text items to add'),
-    tags: z.array(z.string()).optional().describe('Tag IDs to set: reply, action, hold, done, unnecessary, info, urgent'),
+    tags: z.array(TagSchema).optional().describe('Tag IDs to set: reply, action, hold, done, unnecessary, info, urgent'),
     replace_content: z.boolean().default(false).describe('If true, replace entire content. If false, append new content with timestamp separator.'),
   },
   async (params) => {
-    const fs = await import('fs');
     ensureNotesDir();
-    const found = findNotePath(params.mail_id);
+    const conversationId = getConversationId(params.mail_id, params.account);
+    const found = findNotePath(params.mail_id, conversationId);
     const now = new Date().toISOString();
     const dateLabel = new Date().toLocaleDateString('ja-JP', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 

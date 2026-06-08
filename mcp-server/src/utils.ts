@@ -4,6 +4,7 @@
  */
 
 import { openDbSync } from './db/connection.js';
+import { findAccount } from './db/accounts.js';
 
 // ---------------------------------------------------------------------------
 // Address formatting
@@ -98,6 +99,47 @@ export function getFolderMap(accountUid: string, mailSubdir: string): Map<number
   return folderMap;
 }
 
+/**
+ * Read folders.dat ONCE and return both the id→name map and the set of Sent
+ * folder ids. Several tools need both; this avoids opening folders.dat twice
+ * (which is what calling getFolderMap + getSentFolderIds separately would do).
+ */
+export function getFolderInfo(
+  accountUid: string,
+  mailSubdir: string,
+): { folderMap: Map<number, string>; sentFolderIds: Set<number> } {
+  const folderMap = new Map<number, string>();
+  const sentFolderIds = new Set<number>();
+  try {
+    const fdb = openDbSync(accountUid, mailSubdir, 'folders.dat');
+    try {
+      const fRows = fdb
+        .prepare(`SELECT id, name FROM Folders`)
+        .all() as Array<{ id: number; name: string }>;
+      for (const f of fRows) {
+        folderMap.set(f.id, f.name);
+        if (SENT_FOLDER_NAMES.has(f.name.toLowerCase())) {
+          sentFolderIds.add(f.id);
+        }
+      }
+    } finally {
+      fdb.close();
+    }
+  } catch {
+    // folders.dat may not exist
+  }
+  return { folderMap, sentFolderIds };
+}
+
+/**
+ * Escape `%`, `_`, and the escape char itself for safe use in a SQL LIKE
+ * pattern. Pair with an `ESCAPE '\\'` clause so user input is matched literally
+ * instead of as wildcards. Returns the inner pattern WITHOUT surrounding `%`.
+ */
+export function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 // ---------------------------------------------------------------------------
 // Notes directory (shared with tag_mail, get_note, update_note)
 // ---------------------------------------------------------------------------
@@ -122,26 +164,61 @@ export function ensureNotesDir(): string {
   return dir;
 }
 
-/** Find an existing note file for a mail (tries conv-{convId} then mail-{mailId}) */
+/**
+ * Look up the conversationId for a mail so notes can be keyed the same way the
+ * GUI keys them (`conv-{conversationId}` when present, else `mail-{mailId}`).
+ *
+ * Returns null if the account/mail can't be resolved — callers then fall back
+ * to the mail-based note id. Never throws.
+ */
+export function getConversationId(mailId: number, accountEmail: string): string | null {
+  try {
+    const acc = findAccount(accountEmail);
+    return withDbSync(acc.accountUid, acc.mailSubdir, 'mail_index.dat', (db) => {
+      const row = db
+        .prepare('SELECT conversationId FROM MailItems WHERE id = ?')
+        .get(mailId) as { conversationId: string | null } | undefined;
+      return row?.conversationId ?? null;
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Find the note file for a mail.
+ *
+ * Resolution order (matches the GUI's NoteService keying):
+ *   1. If an existing `conv-{conversationId}.json` is present, use it.
+ *   2. Else if an existing `mail-{mailId}.json` is present, use it (legacy /
+ *      notes created before conversationId was threaded through).
+ *   3. For a brand-new note: prefer `conv-{conversationId}` when a
+ *      conversationId is known, otherwise `mail-{mailId}`.
+ *
+ * Step 3 is the key fix for the "note id split" bug: the GUI writes
+ * `conv-{convId}` whenever a conversationId exists, so MCP must do the same or
+ * the two sides create separate, mutually-invisible note files.
+ */
 export function findNotePath(mailId: number, conversationId?: string | null): { path: string; id: string; exists: boolean } {
   const notesDir = getNotesDir();
 
-  // Try conversation-based ID first
-  if (conversationId) {
-    const convId = `conv-${conversationId}`;
-    const convPath = path.join(notesDir, `${convId}.json`);
-    if (fs.existsSync(convPath)) {
-      return { path: convPath, id: convId, exists: true };
-    }
+  // 1. Existing conversation-based note
+  const convId = conversationId ? `conv-${conversationId}` : null;
+  const convPath = convId ? path.join(notesDir, `${convId}.json`) : null;
+  if (convId && convPath && fs.existsSync(convPath)) {
+    return { path: convPath, id: convId, exists: true };
   }
 
-  // Try mail-based ID
+  // 2. Existing mail-based note
   const mailNoteId = `mail-${mailId}`;
   const mailPath = path.join(notesDir, `${mailNoteId}.json`);
   if (fs.existsSync(mailPath)) {
     return { path: mailPath, id: mailNoteId, exists: true };
   }
 
-  // Default: prefer mail-based ID for new notes (matches tag_mail behavior)
+  // 3. New note — match the GUI: conv-{convId} when available, else mail-{mailId}.
+  if (convId && convPath) {
+    return { path: convPath, id: convId, exists: false };
+  }
   return { path: mailPath, id: mailNoteId, exists: false };
 }

@@ -1,6 +1,6 @@
 import { ACCOUNTS, findAccount } from '../db/accounts.js';
-import { openDbSync } from '../db/connection.js';
 import { dateToTicks, ticksToISO } from '../db/tick-converter.js';
+import { formatAddress, withDbSync, getFolderInfo, escapeLike } from '../utils.js';
 import type { MailSummary } from '../types.js';
 
 interface SentMailsParams {
@@ -8,26 +8,6 @@ interface SentMailsParams {
   account?: string;
   limit: number;
   keyword?: string;
-}
-
-function formatAddress(displayName: string | null, address: string | null): string {
-  if (!address) return '';
-  if (displayName) return `${displayName} <${address}>`;
-  return address;
-}
-
-function withDbSync<T>(
-  accountUid: string,
-  subdir: string,
-  dbName: string,
-  fn: (db: import('better-sqlite3').Database) => T,
-): T {
-  const db = openDbSync(accountUid, subdir, dbName);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
 }
 
 function fetchSentForAccount(
@@ -38,37 +18,23 @@ function fetchSentForAccount(
 ): MailSummary[] {
   const acc = findAccount(accountEmail);
 
+  // Read folders.dat once for both the folder name map and the Sent folder ids.
+  const { folderMap, sentFolderIds: sentFolderIdSet } = getFolderInfo(
+    acc.accountUid,
+    acc.mailSubdir,
+  );
+  const sentFolderIds = [...sentFolderIdSet];
+
+  if (sentFolderIds.length === 0) return [];
+
   return withDbSync(acc.accountUid, acc.mailSubdir, 'mail_index.dat', (db) => {
-    // Find Sent folder IDs
-    const sentFolderIds: number[] = [];
-    try {
-      const fdb = openDbSync(acc.accountUid, acc.mailSubdir, 'folders.dat');
-      try {
-        const fRows = fdb
-          .prepare(`SELECT id, name FROM Folders`)
-          .all() as Array<{ id: number; name: string }>;
-        for (const f of fRows) {
-          const lower = f.name.toLowerCase();
-          if (lower === 'sent' || lower === '送信済み' || lower === '送信箱' || lower === 'sent mail' || lower === 'sent items') {
-            sentFolderIds.push(f.id);
-          }
-        }
-      } finally {
-        fdb.close();
-      }
-    } catch {
-      // folders.dat may not exist
-    }
-
-    if (sentFolderIds.length === 0) return [];
-
     const folderPlaceholders = sentFolderIds.map(() => '?').join(',');
     const keywordFilter = keyword
-      ? 'AND (subject LIKE ? OR preview LIKE ?)'
+      ? "AND (subject LIKE ? ESCAPE '\\' OR preview LIKE ? ESCAPE '\\')"
       : '';
     const params: (number | string)[] = [cutoffTicks, ...sentFolderIds];
     if (keyword) {
-      const pattern = `%${keyword}%`;
+      const pattern = `%${escapeLike(keyword)}%`;
       params.push(pattern, pattern);
     }
     params.push(limit);
@@ -96,24 +62,6 @@ function fetchSentForAccount(
     const addrStmt = db.prepare(
       `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
     );
-
-    // Build folder name map
-    const folderMap = new Map<number, string>();
-    try {
-      const fdb = openDbSync(acc.accountUid, acc.mailSubdir, 'folders.dat');
-      try {
-        const fRows = fdb
-          .prepare(`SELECT id, name FROM Folders`)
-          .all() as Array<{ id: number; name: string }>;
-        for (const f of fRows) {
-          folderMap.set(f.id, f.name);
-        }
-      } finally {
-        fdb.close();
-      }
-    } catch {
-      // ignore
-    }
 
     return rows.map((row) => {
       const addrs = addrStmt.all(row.id) as Array<{

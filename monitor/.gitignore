@@ -7,3 +7,4 @@ release
 *.dat-shm
 *.dat-wal
 /tmp/
+unread-backup-*.json

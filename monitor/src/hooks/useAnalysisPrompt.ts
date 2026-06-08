@@ -64,15 +64,19 @@ export function useAnalysisPrompt(): string {
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
 
   useEffect(() => {
+    let cancelled = false;
     (async () => {
       const content = await window.electronAPI.getSkillContent(SKILL_NAME);
+      if (cancelled) return;
       if (content) {
         setPrompt(content);
       } else {
         await window.electronAPI.saveSkillContent(SKILL_NAME, DEFAULT_PROMPT);
+        if (cancelled) return;
         setPrompt(DEFAULT_PROMPT);
       }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   return prompt;

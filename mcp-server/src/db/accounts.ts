@@ -65,10 +65,34 @@ export function getAccounts(): AccountConfig[] {
   return loadAccounts();
 }
 
+/**
+ * Lazily-loaded, array-like view over the configured accounts.
+ *
+ * The proxy delegates to the live (cached) accounts array so that `ACCOUNTS`
+ * reflects config that is only loaded on first access. It forwards `get`,
+ * `has`, and `ownKeys` to the *real* array — forwarding `has`/`ownKeys` is
+ * essential: the old version forwarded only `get`, so existence probes fell
+ * through to the empty `[]` target. Array methods that test existence
+ * (`Array.prototype.map`/`filter`/`forEach`) then saw every index as a hole and
+ * produced `[null, null, …]`, silently breaking `get_accounts` and the
+ * `ACCOUNTS.map(a => a.email)` "sent by me" detection in get_mail_thread /
+ * analyze_thread.
+ *
+ * `getOwnPropertyDescriptor` is intentionally NOT trapped: forwarding the real
+ * array's non-configurable `length` descriptor would violate the proxy
+ * invariant against the empty target and throw. Leaving it to fall through to
+ * the target is safe because `map`/`filter`/`forEach`/`Object.keys` rely on
+ * `has` + `get` (now forwarded), not on the own-descriptor of each index.
+ */
 export const ACCOUNTS = new Proxy([] as AccountConfig[], {
-  get(_target, prop) {
-    const accounts = loadAccounts();
-    return Reflect.get(accounts, prop);
+  get(_target, prop, receiver) {
+    return Reflect.get(loadAccounts(), prop, receiver);
+  },
+  has(_target, prop) {
+    return Reflect.has(loadAccounts(), prop);
+  },
+  ownKeys(_target) {
+    return Reflect.ownKeys(loadAccounts());
   },
 });
 

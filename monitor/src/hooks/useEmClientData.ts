@@ -8,6 +8,7 @@ import type {
   FolderItem,
   AccountConfig,
 } from '../types';
+import { useAbortableRequest } from './useAbortableRequest';
 
 interface EmClientData {
   mails: MailItem[];
@@ -30,12 +31,15 @@ export function useEmClientData(settings: AppSettings): EmClientData {
   const [accounts, setAccounts] = useState<AccountConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const beginRequest = useAbortableRequest();
 
   const refresh = useCallback(async () => {
+    const signal = beginRequest();
     setLoading(true);
     setError(null);
     try {
       const allAccounts = await window.electronAPI.getAccounts();
+      if (signal.aborted) return;
       setAccounts(allAccounts);
 
       const selected = allAccounts.filter(
@@ -49,6 +53,7 @@ export function useEmClientData(settings: AppSettings): EmClientData {
           window.electronAPI.getMails(a.email, settings.mailDaysBack)
         )
       );
+      if (signal.aborted) return;
       const allMails = mailResults.flat();
       setMails(allMails);
 
@@ -57,16 +62,19 @@ export function useEmClientData(settings: AppSettings): EmClientData {
           window.electronAPI.getEvents(a.email, settings.eventDaysForward)
         )
       );
+      if (signal.aborted) return;
       setEvents(eventResults.flat());
 
       const taskResults = await Promise.all(
         selected.map((a) => window.electronAPI.getTasks(a.email))
       );
+      if (signal.aborted) return;
       setTasks(taskResults.flat());
 
       const folderResults = await Promise.all(
         selected.map((a) => window.electronAPI.getFolders(a.email))
       );
+      if (signal.aborted) return;
       setFolders(folderResults.flat());
 
       const extractedActions = await window.electronAPI.extractActions(
@@ -74,13 +82,15 @@ export function useEmClientData(settings: AppSettings): EmClientData {
         settings.aiEnabled,
         settings.apiKey
       );
+      if (signal.aborted) return;
       setActions(extractedActions);
     } catch (err) {
+      if (signal.aborted) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      if (!signal.aborted) setLoading(false);
     }
-  }, [settings]);
+  }, [settings, beginRequest]);
 
   return { mails, events, tasks, actions, folders, accounts, loading, error, refresh };
 }

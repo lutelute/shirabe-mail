@@ -512,12 +512,12 @@ export interface ElectronAPI {
   getAccounts: () => Promise<AccountConfig[]>;
   getSettings: () => Promise<AppSettings>;
   saveSettings: (settings: AppSettings) => Promise<void>;
-  triageEmails: (mails: MailItem[], apiKey: string) => Promise<TriageResult[]>;
-  extractTodos: (threadMessages: ThreadMessage[], apiKey: string) => Promise<TodoItem[]>;
+  triageEmails: (mails: MailItem[], apiKey: string, operationId?: string) => Promise<TriageResult[]>;
+  extractTodos: (threadMessages: ThreadMessage[], apiKey: string, operationId?: string) => Promise<TodoItem[]>;
   getThreadMessages: (mailId: number, accountEmail: string) => Promise<ThreadMessage[]>;
   loadProjectContext: (folderPath: string) => Promise<ProjectContext>;
   listProjectFolders: (basePath: string) => Promise<string[]>;
-  startHistoricalAudit: (params: AuditParams) => Promise<AuditResult>;
+  startHistoricalAudit: (params: AuditParams, operationId?: string) => Promise<AuditResult>;
   cancelOperation: (operationId: string) => Promise<void>;
   onAuditProgress: (callback: (progress: AuditScanProgress) => void) => () => void;
   runClaudeAnalysis: (prompt: string, options?: AnalysisOptions) => Promise<Proposal>;

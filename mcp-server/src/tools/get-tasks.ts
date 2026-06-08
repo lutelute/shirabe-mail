@@ -1,25 +1,11 @@
 import { ACCOUNTS, findAccount } from '../db/accounts.js';
-import { openDbSync } from '../db/connection.js';
 import { ticksToISO } from '../db/tick-converter.js';
+import { withDbSync } from '../utils.js';
 import type { TaskOutput } from '../types.js';
 
 interface GetTasksParams {
   account?: string;
   include_completed: boolean;
-}
-
-function withDbSync<T>(
-  accountUid: string,
-  subdir: string,
-  dbName: string,
-  fn: (db: import('better-sqlite3').Database) => T,
-): T {
-  const db = openDbSync(accountUid, subdir, dbName);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
 }
 
 function fetchTasksForAccount(

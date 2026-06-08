@@ -1,6 +1,7 @@
 import { findAccount } from '../db/accounts.js';
 import { openDbSync } from '../db/connection.js';
 import { dateToTicks, ticksToISO } from '../db/tick-converter.js';
+import { formatAddress, getFolderInfo } from '../utils.js';
 import type { MailSummary } from '../types.js';
 
 interface FolderMailsParams {
@@ -11,12 +12,6 @@ interface FolderMailsParams {
   date_to?: string;    // ISO date string (e.g. "2024-03-31")
   limit: number;
   include_subfolders: boolean;
-}
-
-function formatAddress(displayName: string | null, address: string | null): string {
-  if (!address) return '';
-  if (displayName) return `${displayName} <${address}>`;
-  return address;
 }
 
 export function getFolderMails(params: FolderMailsParams): { total: number; mails: MailSummary[] } {
@@ -111,28 +106,8 @@ export function getFolderMails(params: FolderMailsParams): { total: number; mail
       `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
     );
 
-    // Folder names
-    const folderMap = new Map<number, string>();
-    const sentFolderIds = new Set<number>();
-    try {
-      const fdb = openDbSync(acc.accountUid, acc.mailSubdir, 'folders.dat');
-      try {
-        const fRows = fdb
-          .prepare(`SELECT id, name FROM Folders`)
-          .all() as Array<{ id: number; name: string }>;
-        for (const f of fRows) {
-          folderMap.set(f.id, f.name);
-          const lower = f.name.toLowerCase();
-          if (lower === 'sent' || lower === '送信済み' || lower === '送信箱' || lower === 'sent mail' || lower === 'sent items') {
-            sentFolderIds.add(f.id);
-          }
-        }
-      } finally {
-        fdb.close();
-      }
-    } catch {
-      // folders.dat may not exist
-    }
+    // Folder names + sent folder ids (single read of folders.dat)
+    const { folderMap, sentFolderIds } = getFolderInfo(acc.accountUid, acc.mailSubdir);
 
     const threadInfoStmt = mdb.prepare(
       `SELECT COUNT(*) as cnt,

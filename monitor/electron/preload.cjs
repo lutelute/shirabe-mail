@@ -21,18 +21,18 @@ const api = {
     ipcRenderer.invoke('getSettings'),
   saveSettings: (settings) =>
     ipcRenderer.invoke('saveSettings', settings),
-  triageEmails: (mails, apiKey) =>
-    ipcRenderer.invoke('triageEmails', mails, apiKey),
-  extractTodos: (threadMessages, apiKey) =>
-    ipcRenderer.invoke('extractTodos', threadMessages, apiKey),
+  triageEmails: (mails, apiKey, operationId) =>
+    ipcRenderer.invoke('triageEmails', mails, apiKey, operationId),
+  extractTodos: (threadMessages, apiKey, operationId) =>
+    ipcRenderer.invoke('extractTodos', threadMessages, apiKey, operationId),
   getThreadMessages: (mailId, accountEmail) =>
     ipcRenderer.invoke('getThreadMessages', mailId, accountEmail),
   loadProjectContext: (folderPath) =>
     ipcRenderer.invoke('loadProjectContext', folderPath),
   listProjectFolders: (basePath) =>
     ipcRenderer.invoke('listProjectFolders', basePath),
-  startHistoricalAudit: (params) =>
-    ipcRenderer.invoke('startHistoricalAudit', params),
+  startHistoricalAudit: (params, operationId) =>
+    ipcRenderer.invoke('startHistoricalAudit', params, operationId),
   cancelOperation: (operationId) =>
     ipcRenderer.invoke('cancelOperation', operationId),
   onAuditProgress: (callback) => {

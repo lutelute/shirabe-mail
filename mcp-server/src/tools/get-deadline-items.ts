@@ -1,6 +1,6 @@
 import { ACCOUNTS, findAccount } from '../db/accounts.js';
-import { openDbSync } from '../db/connection.js';
 import { dateToTicks, ticksToISO } from '../db/tick-converter.js';
+import { withDbSync, escapeLike } from '../utils.js';
 
 interface DeadlineItemsParams {
   days_forward: number;
@@ -31,20 +31,6 @@ interface DeadlineResult {
 const DEADLINE_KEYWORDS = [
   '締切', '〆切', '期限', 'deadline', 'due', 'until', 'まで',
 ];
-
-function withDbSync<T>(
-  accountUid: string,
-  subdir: string,
-  dbName: string,
-  fn: (db: import('better-sqlite3').Database) => T,
-): T {
-  const db = openDbSync(accountUid, subdir, dbName);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
-}
 
 function classifyUrgency(dateStr: string): DeadlineItem['urgency'] {
   const itemDate = new Date(dateStr);
@@ -153,10 +139,10 @@ function fetchMailDeadlineMentions(
 
   return withDbSync(acc.accountUid, acc.mailSubdir, 'mail_index.dat', (db) => {
     // Build keyword OR condition for subject search
-    const conditions = DEADLINE_KEYWORDS.map(() => 'subject LIKE ?').join(' OR ');
+    const conditions = DEADLINE_KEYWORDS.map(() => "subject LIKE ? ESCAPE '\\'").join(' OR ');
     const params: (number | string)[] = [
       cutoffTicks,
-      ...DEADLINE_KEYWORDS.map((k) => `%${k}%`),
+      ...DEADLINE_KEYWORDS.map((k) => `%${escapeLike(k)}%`),
       limit,
     ];
 

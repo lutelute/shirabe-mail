@@ -5,7 +5,7 @@ import {
   withDbSync,
   normalizeSubject,
   getSentFolderIds,
-  getFolderMap,
+  getFolderInfo,
 } from '../utils.js';
 
 interface MailThreadParams {
@@ -87,7 +87,7 @@ function searchCrossAccountSent(
           .all() as Array<{ id: number; subject: string; date: number }>;
 
         const addrStmt = db.prepare(
-          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ?`,
+          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
         );
 
         for (const row of rows) {
@@ -291,11 +291,10 @@ export function getMailThread(params: MailThreadParams): ThreadResult {
       forwardDate: number;
     }>;
 
-    const folderMap = getFolderMap(acc.accountUid, acc.mailSubdir);
-    const sentFolderIds = getSentFolderIds(acc.accountUid, acc.mailSubdir);
+    const { folderMap, sentFolderIds } = getFolderInfo(acc.accountUid, acc.mailSubdir);
 
     const addrStmt = db.prepare(
-      `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ?`,
+      `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
     );
 
     const participantSet = new Set<string>();
@@ -359,7 +358,7 @@ export function getMailThread(params: MailThreadParams): ThreadResult {
         }>;
 
         const addrStmt = db.prepare(
-          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ?`,
+          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
         );
 
         for (const row of rows) {

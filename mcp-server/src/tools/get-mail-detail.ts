@@ -1,31 +1,11 @@
 import { findAccount } from '../db/accounts.js';
-import { openDbSync } from '../db/connection.js';
 import { ticksToISO } from '../db/tick-converter.js';
+import { formatAddress, withDbSync, getFolderMap } from '../utils.js';
 import type { MailDetail } from '../types.js';
 
 interface MailDetailParams {
   mail_id: number;
   account: string;
-}
-
-function formatAddress(displayName: string | null, address: string | null): string {
-  if (!address) return '';
-  if (displayName) return `${displayName} <${address}>`;
-  return address;
-}
-
-function withDbSync<T>(
-  accountUid: string,
-  subdir: string,
-  dbName: string,
-  fn: (db: import('better-sqlite3').Database) => T,
-): T {
-  const db = openDbSync(accountUid, subdir, dbName);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
 }
 
 export function getMailDetail(params: MailDetailParams): MailDetail {
@@ -68,20 +48,7 @@ export function getMailDetail(params: MailDetailParams): MailDetail {
     const ccAddrs = addrs.filter((a) => a.type === 4);
 
     // Get folder name
-    let folderName = '';
-    try {
-      const fdb = openDbSync(acc.accountUid, acc.mailSubdir, 'folders.dat');
-      try {
-        const fRow = fdb
-          .prepare(`SELECT name FROM Folders WHERE id = ?`)
-          .get(row.folder) as { name: string } | undefined;
-        if (fRow) folderName = fRow.name;
-      } finally {
-        fdb.close();
-      }
-    } catch {
-      // folders.dat may not exist
-    }
+    const folderName = getFolderMap(acc.accountUid, acc.mailSubdir).get(row.folder) ?? '';
 
     return {
       id: row.id,

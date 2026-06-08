@@ -1,26 +1,12 @@
 import { ACCOUNTS, findAccount } from '../db/accounts.js';
-import { openDbSync } from '../db/connection.js';
 import { dateToTicks, ticksToDate } from '../db/tick-converter.js';
+import { withDbSync } from '../utils.js';
 import type { CalendarEventOutput } from '../types.js';
 
 interface CalendarEventsParams {
   days_forward: number;
   days_back: number;
   account?: string;
-}
-
-function withDbSync<T>(
-  accountUid: string,
-  subdir: string,
-  dbName: string,
-  fn: (db: import('better-sqlite3').Database) => T,
-): T {
-  const db = openDbSync(accountUid, subdir, dbName);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
 }
 
 function fetchEventsForAccount(

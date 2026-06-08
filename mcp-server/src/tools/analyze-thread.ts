@@ -4,8 +4,7 @@ import {
   formatAddress,
   withDbSync,
   normalizeSubject,
-  getSentFolderIds,
-  getFolderMap,
+  getFolderInfo,
 } from '../utils.js';
 
 // ---------------------------------------------------------------------------
@@ -278,8 +277,7 @@ export function analyzeThread(params: AnalyzeThreadParams): ThreadAnalysis {
       folder: number;
     }>;
 
-    const folderMap = getFolderMap(acc.accountUid, acc.mailSubdir);
-    const sentFolderIds = getSentFolderIds(acc.accountUid, acc.mailSubdir);
+    const { folderMap, sentFolderIds } = getFolderInfo(acc.accountUid, acc.mailSubdir);
 
     const addrStmt = db.prepare(
       `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ?`,

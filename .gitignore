@@ -9,3 +9,5 @@ monitor/release/
 .mcp.json
 .DS_Store
 *.dmg
+# Local runtime logs & secrets (e.g. logs/security/.security-key)
+logs/

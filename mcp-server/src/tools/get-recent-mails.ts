@@ -1,6 +1,6 @@
 import { ACCOUNTS, findAccount } from '../db/accounts.js';
-import { openDbSync } from '../db/connection.js';
 import { dateToTicks, ticksToISO } from '../db/tick-converter.js';
+import { formatAddress, withDbSync, getFolderInfo } from '../utils.js';
 import type { MailSummary } from '../types.js';
 
 interface RecentMailsParams {
@@ -8,26 +8,6 @@ interface RecentMailsParams {
   account?: string;
   limit: number;
   include_read: boolean;
-}
-
-function formatAddress(displayName: string | null, address: string | null): string {
-  if (!address) return '';
-  if (displayName) return `${displayName} <${address}>`;
-  return address;
-}
-
-function withDbSync<T>(
-  accountUid: string,
-  subdir: string,
-  dbName: string,
-  fn: (db: import('better-sqlite3').Database) => T,
-): T {
-  const db = openDbSync(accountUid, subdir, dbName);
-  try {
-    return fn(db);
-  } finally {
-    db.close();
-  }
 }
 
 function fetchRecentForAccount(
@@ -63,27 +43,7 @@ function fetchRecentForAccount(
       `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
     );
 
-    const folderMap = new Map<number, string>();
-    const sentFolderIds = new Set<number>();
-    try {
-      const fdb = openDbSync(acc.accountUid, acc.mailSubdir, 'folders.dat');
-      try {
-        const fRows = fdb
-          .prepare(`SELECT id, name FROM Folders`)
-          .all() as Array<{ id: number; name: string }>;
-        for (const f of fRows) {
-          folderMap.set(f.id, f.name);
-          const lower = f.name.toLowerCase();
-          if (lower === 'sent' || lower === '送信済み' || lower === '送信箱' || lower === 'sent mail' || lower === 'sent items') {
-            sentFolderIds.add(f.id);
-          }
-        }
-      } finally {
-        fdb.close();
-      }
-    } catch {
-      // folders.dat may not exist
-    }
+    const { folderMap, sentFolderIds } = getFolderInfo(acc.accountUid, acc.mailSubdir);
 
     const threadInfoStmt = db.prepare(
       `SELECT COUNT(*) as cnt,

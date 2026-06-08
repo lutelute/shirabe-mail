@@ -1,6 +1,7 @@
 import { findAccount } from '../db/accounts.js';
 import { openDbSync } from '../db/connection.js';
 import { dateToTicks, ticksToISO } from '../db/tick-converter.js';
+import { formatAddress, getFolderInfo, escapeLike } from '../utils.js';
 import type { MailSummary } from '../types.js';
 
 interface ScanHistoricalEmailsParams {
@@ -33,12 +34,6 @@ const EPOCH_OFFSET_TICKS = 621355968000000000;
 /** 100-nanosecond intervals per second */
 const TICKS_PER_SECOND = 10000000;
 
-function formatAddress(displayName: string | null, address: string | null): string {
-  if (!address) return '';
-  if (displayName) return `${displayName} <${address}>`;
-  return address;
-}
-
 export function scanHistoricalEmails(params: ScanHistoricalEmailsParams): ScanHistoricalEmailsResult {
   const acc = findAccount(params.account);
 
@@ -53,8 +48,8 @@ export function scanHistoricalEmails(params: ScanHistoricalEmailsParams): ScanHi
   const bindParams: (number | string)[] = [fromTicks, toTicks];
 
   if (params.topic) {
-    const pattern = `%${params.topic}%`;
-    conditions.push('(subject LIKE ? OR preview LIKE ?)');
+    const pattern = `%${escapeLike(params.topic)}%`;
+    conditions.push("(subject LIKE ? ESCAPE '\\' OR preview LIKE ? ESCAPE '\\')");
     bindParams.push(pattern, pattern);
   }
 
@@ -135,28 +130,8 @@ export function scanHistoricalEmails(params: ScanHistoricalEmailsParams): ScanHi
       `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
     );
 
-    // Folder names
-    const folderMap = new Map<number, string>();
-    const sentFolderIds = new Set<number>();
-    try {
-      const fdb = openDbSync(acc.accountUid, acc.mailSubdir, 'folders.dat');
-      try {
-        const fRows = fdb
-          .prepare(`SELECT id, name FROM Folders`)
-          .all() as Array<{ id: number; name: string }>;
-        for (const f of fRows) {
-          folderMap.set(f.id, f.name);
-          const lower = f.name.toLowerCase();
-          if (lower === 'sent' || lower === '送信済み' || lower === '送信箱' || lower === 'sent mail' || lower === 'sent items') {
-            sentFolderIds.add(f.id);
-          }
-        }
-      } finally {
-        fdb.close();
-      }
-    } catch {
-      // folders.dat may not exist
-    }
+    // Folder names + sent folder ids (single read of folders.dat)
+    const { folderMap, sentFolderIds } = getFolderInfo(acc.accountUid, acc.mailSubdir);
 
     const threadInfoStmt = mdb.prepare(
       `SELECT COUNT(*) as cnt,

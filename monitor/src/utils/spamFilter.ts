@@ -1,9 +1,65 @@
 /**
- * Lightweight client-side spam filter for Dashboard use.
- * Mirrors the patterns from electron/services/junk-detector.ts
- * but runs in the renderer process without API calls.
+ * Single source of truth for client-side spam / junk classification in the
+ * renderer. Previously the logic was split across two systems:
+ *   - utils/spamFilter.ts  : content heuristic (isObviousSpam)
+ *   - hooks/useMailData.ts : folder-name list (isSpamFolder)
+ * which disagreed and — worse — the folder list lumped Drafts / Trash / Sent
+ * in with real spam folders, causing those mails to be silently dropped.
+ *
+ * This module unifies both. The content heuristic mirrors the patterns from
+ * electron/services/junk-detector.ts but runs in the renderer without API calls.
+ *
+ * Folder taxonomy:
+ *   - JUNK folders      : actual spam / junk mail (safe to exclude).
+ *   - PROTECTED folders : Drafts / Trash / Deleted / Sent — user content that
+ *                         must NEVER be judged or excluded as spam.
  */
 import type { MailItem } from '../types';
+
+// === Folder classification ===
+
+// Folders that genuinely hold spam / junk mail.
+const JUNK_FOLDER_NAMES = new Set([
+  'spam', 'junk', 'junk e-mail', 'junk email',
+  '迷惑メール', 'スパム',
+  'bulk mail', 'bulk',
+]);
+
+// Folders whose mail is legitimate user content and must be exempt from any
+// spam judgement (drafts the user is writing, trashed items, sent mail).
+const PROTECTED_FOLDER_NAMES = new Set([
+  'trash', 'deleted items', 'deleted', 'ゴミ箱', '削除済みアイテム',
+  'drafts', 'draft', '下書き',
+  'sent', 'sent items', 'sent mail', '送信済み', '送信済みアイテム',
+  'outbox', '送信トレイ',
+]);
+
+/** True only for folders that actually hold spam / junk mail. */
+export function isJunkFolder(folderName?: string): boolean {
+  if (!folderName) return false;
+  return JUNK_FOLDER_NAMES.has(folderName.trim().toLowerCase());
+}
+
+/**
+ * True for folders that must be exempt from spam judgement
+ * (Drafts / Trash / Deleted / Sent / Outbox).
+ */
+export function isProtectedFolder(folderName?: string): boolean {
+  if (!folderName) return false;
+  return PROTECTED_FOLDER_NAMES.has(folderName.trim().toLowerCase());
+}
+
+/**
+ * @deprecated Use {@link isJunkFolder} (real spam folders only) or
+ * {@link shouldExcludeAsSpam} (full exclusion decision). Retained as the union
+ * of junk + protected folders only for any callers that relied on the old
+ * "is this a non-inbox folder" semantics; new code should not use it.
+ */
+export function isSpamFolder(folderName?: string): boolean {
+  return isJunkFolder(folderName) || isProtectedFolder(folderName);
+}
+
+// === Content heuristic ===
 
 // Keywords that indicate marketing/spam content
 const SPAM_KEYWORDS = [
@@ -47,10 +103,14 @@ function isReplyOrForward(subject: string): boolean {
 
 /**
  * Quick check if a mail is obviously spam based on content patterns.
- * Does NOT filter by folder name — content-only analysis.
+ * Does NOT filter by folder name — content-only analysis — except that mails in
+ * protected folders (Drafts / Trash / Sent) are never judged as spam.
  * Returns true only for high-confidence spam (2+ pattern matches).
  */
 export function isObviousSpam(mail: MailItem): boolean {
+  // Never judge user content in protected folders.
+  if (isProtectedFolder(mail.folderName)) return false;
+
   const senderAddr = mail.from?.address?.toLowerCase() ?? '';
 
   // Safe domains are never spam
@@ -78,4 +138,14 @@ export function isObviousSpam(mail: MailItem): boolean {
   }
 
   return matchCount >= 2;
+}
+
+/**
+ * Unified decision used when fetching mail with "exclude spam" enabled.
+ * A mail is excluded only when it lives in a genuine junk/spam folder.
+ * Protected folders (Drafts / Trash / Sent) are always kept.
+ */
+export function shouldExcludeAsSpam(mail: { folderName?: string }): boolean {
+  if (isProtectedFolder(mail.folderName)) return false;
+  return isJunkFolder(mail.folderName);
 }

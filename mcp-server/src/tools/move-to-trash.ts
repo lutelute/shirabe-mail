@@ -1,5 +1,11 @@
 import { findAccount } from '../db/accounts.js';
-import { openDbSync, openDbForWrite } from '../db/connection.js';
+import {
+  openDbSync,
+  openDbForWrite,
+  isEmClientRunning,
+  backupDbFile,
+  resolveDbPath,
+} from '../db/connection.js';
 
 interface MoveToTrashParams {
   mail_ids: number[];
@@ -11,6 +17,7 @@ interface MoveToTrashResult {
   failed: number;
   trashFolderName: string;
   errors: string[];
+  backupPath?: string;
 }
 
 const TRASH_NAMES = [
@@ -54,6 +61,19 @@ function findTrashFolderId(
 export function moveToTrash(params: MoveToTrashParams): MoveToTrashResult {
   const acc = findAccount(params.account);
 
+  // Refuse to write while eM Client is running — its sync engine would race
+  // with us and could silently roll the change back or corrupt the WAL.
+  if (isEmClientRunning()) {
+    return {
+      moved: 0,
+      failed: params.mail_ids.length,
+      trashFolderName: '',
+      errors: [
+        'eM Client が起動中のため書き込みを中断しました。eM Client を終了してから実行してください。',
+      ],
+    };
+  }
+
   const trashFolder = findTrashFolderId(acc.accountUid, acc.mailSubdir);
   if (!trashFolder) {
     return {
@@ -61,6 +81,20 @@ export function moveToTrash(params: MoveToTrashParams): MoveToTrashResult {
       failed: params.mail_ids.length,
       trashFolderName: '',
       errors: [`Trash folder not found for account ${params.account}`],
+    };
+  }
+
+  // Back up the DB before any destructive write so the user can recover by hand.
+  const dbPath = resolveDbPath(acc.accountUid, acc.mailSubdir, 'mail_index.dat');
+  let backupPath: string;
+  try {
+    backupPath = backupDbFile(dbPath);
+  } catch (e) {
+    return {
+      moved: 0,
+      failed: params.mail_ids.length,
+      trashFolderName: trashFolder.name,
+      errors: [`Backup failed, aborting write: ${(e as Error).message}`],
     };
   }
 
@@ -78,8 +112,10 @@ export function moveToTrash(params: MoveToTrashParams): MoveToTrashResult {
       `SELECT id, folder FROM MailItems WHERE id = ?`,
     );
 
-    for (const mailId of params.mail_ids) {
-      try {
+    // Process the whole batch atomically: either every eligible mail moves or,
+    // on an unexpected error, the transaction rolls back and nothing changes.
+    const runBatch = db.transaction(() => {
+      for (const mailId of params.mail_ids) {
         const row = checkStmt.get(mailId) as
           | { id: number; folder: number }
           | undefined;
@@ -95,11 +131,15 @@ export function moveToTrash(params: MoveToTrashParams): MoveToTrashResult {
         }
         updateStmt.run(trashFolder.id, mailId);
         moved++;
-      } catch (e) {
-        errors.push(`Mail ID ${mailId}: ${(e as Error).message}`);
-        failed++;
       }
-    }
+    });
+
+    runBatch();
+  } catch (e) {
+    // Transaction was rolled back — report the batch as failed.
+    errors.push(`Transaction failed and was rolled back: ${(e as Error).message}`);
+    moved = 0;
+    failed = params.mail_ids.length;
   } finally {
     db.close();
   }
@@ -109,5 +149,6 @@ export function moveToTrash(params: MoveToTrashParams): MoveToTrashResult {
     failed,
     trashFolderName: trashFolder.name,
     errors,
+    backupPath,
   };
 }
