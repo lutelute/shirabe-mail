@@ -162,6 +162,18 @@ const api = {
   // AI auto-tagging
   autoTagMails: (params) =>
     ipcRenderer.invoke('autoTagMails', params),
+  // Night Butler (自動パイプライン)
+  runButlerPipeline: (params) =>
+    ipcRenderer.invoke('runButlerPipeline', params),
+  getLatestDigest: () =>
+    ipcRenderer.invoke('getLatestDigest'),
+  approveButlerItem: (approval) =>
+    ipcRenderer.invoke('approveButlerItem', approval),
+  onDigestUpdated: (callback) => {
+    const handler = (_event, digest) => callback(digest);
+    ipcRenderer.on('digestUpdated', handler);
+    return () => ipcRenderer.removeListener('digestUpdated', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

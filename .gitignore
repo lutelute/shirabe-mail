@@ -11,3 +11,6 @@ monitor/release/
 *.dmg
 # Local runtime logs & secrets (e.g. logs/security/.security-key)
 logs/
+# Claude Code local work records (handover notes, scheduler lock)
+.claude/handover/
+.claude/scheduled_tasks.lock

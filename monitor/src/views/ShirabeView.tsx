@@ -6,6 +6,7 @@ import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { isObviousSpam } from '../utils/spamFilter';
 import { openInEmClient } from '../utils/openInEmClient';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
+import ButlerReport from '../components/ButlerReport';
 
 interface ShirabeViewProps {
   onNavigate: (view: ViewType) => void;
@@ -364,6 +365,9 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
           更新
         </button>
       </div>
+
+      {/* 🌙 Night Butler report — topmost section: what was auto-done + what needs approval */}
+      <ButlerReport onNavigate={onNavigate} />
 
       {/* Running generation indicator */}
       {noteService.runningCount > 0 && (

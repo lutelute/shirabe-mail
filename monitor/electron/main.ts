@@ -30,9 +30,12 @@ import {
   readProjectContext,
 } from './services/project-reader';
 import { ticksToDate } from './services/tick-converter';
+import { runButlerPipeline } from './services/pipeline';
+import type { PipelineDeps } from './services/pipeline';
 import type {
   AppSettings,
   MailItem,
+  MailNote,
   ThreadMessage,
   AuditParams,
   AuditScanProgress,
@@ -40,11 +43,19 @@ import type {
   TodoItem,
   ImapCredentials,
   InvestigationRequest,
+  NightlyDigest,
+  ButlerApproval,
 } from '../src/types/index';
 import { DEFAULT_SETTINGS } from '../src/types/index';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+
+// Set inside registerIpcHandlers; used by the scheduler in app.whenReady().
+let runButlerPipelineFromMain:
+  | ((opts?: { force?: boolean }) => Promise<NightlyDigest>)
+  | null = null;
+let butlerScheduleTimer: ReturnType<typeof setInterval> | null = null;
 
 const isDev = !app.isPackaged;
 
@@ -2002,12 +2013,13 @@ Markdown形式で以下のセクションを含める。メールごとに判定
 
   // --- Reply draft generation via Claude CLI ---
 
-  ipcMain.handle('generateReplyDraft', async (_event, params: {
+  // Extracted so the night-butler pipeline can reuse the exact same draft logic.
+  async function generateReplyDraftImpl(params: {
     threadMessages: ThreadMessage[];
     mail: MailItem;
     instruction?: string;
     existingDraft?: string;
-  }): Promise<{ status: string; draft: string; error?: string }> => {
+  }): Promise<{ status: string; draft: string; error?: string }> {
     if (!fs.existsSync(CLAUDE_CLI_PATH)) {
       return { status: 'error', draft: '', error: `Claude CLIが見つかりません: ${CLAUDE_CLI_PATH}` };
     }
@@ -2104,6 +2116,186 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
       return { status: 'done', draft: result.text };
     }
     return { status: 'error', draft: '', error: 'CLIから応答がありませんでした' };
+  }
+
+  ipcMain.handle('generateReplyDraft', async (_event, params: {
+    threadMessages: ThreadMessage[];
+    mail: MailItem;
+    instruction?: string;
+    existingDraft?: string;
+  }): Promise<{ status: string; draft: string; error?: string }> => {
+    return generateReplyDraftImpl(params);
+  });
+
+  // --- Night Butler pipeline (自動パイプライン) ---
+
+  const BUTLER_STATE_PATH = path.join(app.getPath('userData'), 'butler-state.json');
+  const NIGHTLY_DIGEST_PATH = path.join(app.getPath('userData'), 'nightly-digest.json');
+
+  function readJsonFile<T>(filePath: string): T | null {
+    try {
+      if (!fs.existsSync(filePath)) return null;
+      return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  function writeJsonFile(filePath: string, data: unknown): void {
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+  }
+
+  // Note read/save reusing the same on-disk format as the getNote/saveNote IPC.
+  function readNote(noteId: string): MailNote | null {
+    ensureNotesDir();
+    const filePath = path.join(NOTES_DIR, `${noteId.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
+    return readJsonFile<MailNote>(filePath);
+  }
+
+  function writeNote(note: MailNote): void {
+    ensureNotesDir();
+    const filePath = path.join(NOTES_DIR, `${note.id.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
+    writeJsonFile(filePath, note);
+  }
+
+  // Reversible IMAP move into the quarantine folder (creates folder if needed).
+  async function moveToQuarantine(
+    mailId: number,
+    accountEmail: string,
+    folderName: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    const { moveToFolder } = await import('./services/imap-operations');
+    const settings = loadSettings();
+    const imapConfig = settings.imapConfigs.find((c) => c.accountEmail === accountEmail);
+    if (!imapConfig?.credentials) {
+      return { success: false, error: 'IMAP認証情報が未設定です' };
+    }
+    const res = await moveToFolder(mailId, accountEmail, imapConfig.credentials, folderName);
+    return { success: res.success, error: res.error };
+  }
+
+  function buildPipelineDeps(): PipelineDeps {
+    return {
+      loadSettings,
+      getMails,
+      detectJunk: async (mails, apiKey) => {
+        const s = loadSettings();
+        const whitelist = s.junkWhitelistDomains ?? [];
+        return apiKey
+          ? detectJunkWithAI(mails, apiKey, whitelist)
+          : detectJunkByKeywords(mails, whitelist);
+      },
+      triage: (mails, apiKey) => triageEmailsService(mails, apiKey),
+      getThreadMessages: getThreadMessagesFromDb,
+      generateReplyDraft: generateReplyDraftImpl,
+      moveToQuarantine,
+      getNote: readNote,
+      saveNote: writeNote,
+      butlerStatePath: BUTLER_STATE_PATH,
+      digestPath: NIGHTLY_DIGEST_PATH,
+      readJson: readJsonFile,
+      writeJson: writeJsonFile,
+    };
+  }
+
+  // Guard against overlapping runs (scheduler + manual trigger).
+  let butlerRunning = false;
+
+  async function executeButlerPipeline(opts?: { force?: boolean }): Promise<NightlyDigest> {
+    if (butlerRunning) {
+      const existing = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+      return existing ?? {
+        runAt: new Date().toISOString(),
+        processedCount: 0,
+        autoDone: [],
+        awaitingApproval: [],
+        errors: ['既にパイプラインが実行中です。'],
+        costUsd: 0,
+        running: true,
+      };
+    }
+    butlerRunning = true;
+    try {
+      const digest = await runButlerPipeline(buildPipelineDeps(), opts);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('digestUpdated', digest);
+      }
+      return digest;
+    } finally {
+      butlerRunning = false;
+    }
+  }
+  // Exposed for the scheduler in app.whenReady().
+  runButlerPipelineFromMain = executeButlerPipeline;
+
+  ipcMain.handle('runButlerPipeline', async (_event, params?: { force?: boolean }): Promise<NightlyDigest> => {
+    return executeButlerPipeline(params);
+  });
+
+  ipcMain.handle('getLatestDigest', (): NightlyDigest | null => {
+    return readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+  });
+
+  ipcMain.handle('approveButlerItem', async (_event, approval: ButlerApproval): Promise<{ status: string; error?: string }> => {
+    const digest = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+    if (!digest) return { status: 'error', error: 'ダイジェストが見つかりません' };
+
+    // Locate the awaiting item.
+    const idx = digest.awaitingApproval.findIndex(
+      (e) =>
+        e.mailId === approval.mailId &&
+        e.accountEmail === approval.accountEmail &&
+        ((approval.kind === 'delete' && e.kind === 'await_delete') ||
+          (approval.kind === 'send' && e.kind === 'await_send')),
+    );
+    if (idx === -1) return { status: 'error', error: '対象の承認項目が見つかりません' };
+
+    const item = digest.awaitingApproval[idx];
+    let resultError: string | undefined;
+
+    if (approval.approved) {
+      if (approval.kind === 'delete') {
+        // Safe line: deletion = move to Trash only (never permanent delete).
+        try {
+          const { moveToTrashBatch } = await import('./services/imap-operations');
+          const settings = loadSettings();
+          const imapConfig = settings.imapConfigs.find((c) => c.accountEmail === approval.accountEmail);
+          if (!imapConfig?.credentials) {
+            resultError = 'IMAP認証情報が未設定です';
+          } else {
+            const [res] = await moveToTrashBatch(
+              [approval.mailId],
+              approval.accountEmail,
+              imapConfig.credentials,
+              imapConfig.trashFolderPath,
+            );
+            if (!res.success) resultError = res.error;
+          }
+        } catch (err) {
+          resultError = (err as Error).message;
+        }
+      } else if (approval.kind === 'send') {
+        // Safe line: never auto-send. Open the compose form pre-filled with the draft.
+        try {
+          const toAddr = item.from.match(/<([^>]+)>/)?.[1] ?? item.from;
+          const subject = item.subject.startsWith('Re:') ? item.subject : `Re: ${item.subject}`;
+          await openMailComposeImpl({ to: toAddr, subject, body: item.draft ?? '' });
+        } catch (err) {
+          resultError = (err as Error).message;
+        }
+      }
+    }
+
+    // Remove the item from awaiting regardless (approved-and-acted, or rejected).
+    if (!resultError) {
+      digest.awaitingApproval.splice(idx, 1);
+      writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('digestUpdated', digest);
+      }
+      return { status: 'done' };
+    }
+    return { status: 'error', error: resultError };
   });
 
   // --- AI auto-tagging ---
@@ -2221,12 +2413,13 @@ JSON以外の説明は不要です。`;
 
   // --- Open mail compose via mailto: ---
 
-  ipcMain.handle('openMailCompose', async (_event, params: {
+  // Extracted so approveButlerItem (send) can open the same compose form.
+  async function openMailComposeImpl(params: {
     to: string;
     subject: string;
     body: string;
     cc?: string;
-  }): Promise<void> => {
+  }): Promise<void> {
     const parts: string[] = [];
     parts.push(`subject=${encodeURIComponent(params.subject)}`);
     parts.push(`body=${encodeURIComponent(params.body)}`);
@@ -2235,6 +2428,15 @@ JSON以外の説明は不要です。`;
     }
     const mailto = `mailto:${encodeURIComponent(params.to)}?${parts.join('&')}`;
     await safeOpenExternal(mailto);
+  }
+
+  ipcMain.handle('openMailCompose', async (_event, params: {
+    to: string;
+    subject: string;
+    body: string;
+    cc?: string;
+  }): Promise<void> => {
+    await openMailComposeImpl(params);
   });
 
   // Open a specific mail in eM Client — single Swift helper handles everything
@@ -2389,6 +2591,35 @@ app.whenReady().then(() => {
       }
     } catch { /* silent failure on auto-check */ }
   }, 5000);
+
+  // --- Night Butler scheduler ---
+  // butlerEnabled gates everything. schedule decides cadence:
+  //   'startup' = once on launch, 'hourly'/'daily' = setInterval, 'manual' = nothing.
+  try {
+    const s = loadSettings();
+    if (s.butlerEnabled && runButlerPipelineFromMain) {
+      const run = runButlerPipelineFromMain;
+      const sched = s.butlerSchedule;
+      if (sched === 'startup' || sched === 'hourly' || sched === 'daily') {
+        // Run shortly after launch so the window/IPC are ready.
+        setTimeout(() => {
+          void run().catch((err) =>
+            console.warn('[butler] startup run failed:', (err as Error).message),
+          );
+        }, 15_000);
+      }
+      if (sched === 'hourly' || sched === 'daily') {
+        const intervalMs = sched === 'hourly' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
+        butlerScheduleTimer = setInterval(() => {
+          void run().catch((err) =>
+            console.warn('[butler] scheduled run failed:', (err as Error).message),
+          );
+        }, intervalMs);
+      }
+    }
+  } catch (err) {
+    console.warn('[butler] scheduler init failed:', (err as Error).message);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

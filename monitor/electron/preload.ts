@@ -153,6 +153,18 @@ const api = {
   // Auto-tag mails
   autoTagMails: (params: any) =>
     ipcRenderer.invoke('autoTagMails', params),
+  // Night Butler (自動パイプライン)
+  runButlerPipeline: (params?: { force?: boolean }) =>
+    ipcRenderer.invoke('runButlerPipeline', params),
+  getLatestDigest: () =>
+    ipcRenderer.invoke('getLatestDigest'),
+  approveButlerItem: (approval: any) =>
+    ipcRenderer.invoke('approveButlerItem', approval),
+  onDigestUpdated: (callback: (digest: any) => void) => {
+    const handler = (_event: any, digest: any) => callback(digest);
+    ipcRenderer.on('digestUpdated', handler);
+    return () => ipcRenderer.removeListener('digestUpdated', handler);
+  },
   // Update notification listeners
   onUpdateAvailable: (callback: (info: any) => void) => {
     const handler = (_event: any, info: any) => callback(info);

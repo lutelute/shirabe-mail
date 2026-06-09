@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { useImapOperations } from '../hooks/useImapOperations';
-import type { AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode } from '../types';
+import type { AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerSchedule } from '../types';
 
 function getDefaultImapForAccount(email: string): Partial<ImapCredentials> {
   const domain = email.split('@')[1]?.toLowerCase() ?? '';
@@ -34,6 +34,22 @@ export default function SettingsView() {
         ? prev.selectedAccounts.filter((e) => e !== email)
         : [...prev.selectedAccounts, email];
       return { ...prev, selectedAccounts: selected };
+    });
+    setSaved(false);
+  };
+
+  // 夜間執事の対象アカウント。空配列 = 選択中の全アカウントが対象。
+  // 一部だけ選べば「仕事用だけ自動・プライベートは手動」にできる。
+  const toggleButlerAccount = (email: string) => {
+    setDraft((prev) => {
+      const current = prev.butlerAccounts.length > 0 ? prev.butlerAccounts : [...prev.selectedAccounts];
+      const next = current.includes(email)
+        ? current.filter((e) => e !== email)
+        : [...current, email];
+      // 選択中アカウントが全部対象になったら [] に正規化（=全部）
+      const allSelected =
+        prev.selectedAccounts.length > 0 && prev.selectedAccounts.every((e) => next.includes(e));
+      return { ...prev, butlerAccounts: allSelected ? [] : next };
     });
     setSaved(false);
   };
@@ -412,6 +428,158 @@ export default function SettingsView() {
                   className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
                   placeholder="/path/to/project"
                 />
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ─── Night Butler ─── */}
+        <section>
+          <SectionHeader title="🌙 夜間執事（自動メール処理）" />
+          <div className="space-y-4">
+            {/* Safety line — 先生の安心のため必ず明記 */}
+            <div className="p-3 bg-accent-500/10 border border-accent-500/30 rounded text-xs text-surface-300 leading-relaxed">
+              タグ付け・フォルダ隔離・返信下書きの作成は自動で行います（すべて取り消せます）。
+              <span className="text-accent-400 font-medium">メールの削除と返信の送信は、必ずあなたの承認を求めます。</span>
+            </div>
+
+            {/* 1. Enable toggle */}
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="text-sm text-surface-200">夜間執事を有効にする</label>
+                <p className="text-xs text-surface-500">新着メールを自動で仕分け・タグ付け・下書き準備します</p>
+              </div>
+              <Toggle value={draft.butlerEnabled} onChange={(v) => update('butlerEnabled', v)} />
+            </div>
+
+            {/* 2-5 are dimmed/disabled when butler is off */}
+            <div className={`space-y-4 transition-opacity ${draft.butlerEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
+              {/* 2. Schedule */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-2">実行タイミング</label>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { value: 'startup' as ButlerSchedule, label: '起動時' },
+                    { value: 'hourly' as ButlerSchedule, label: '1時間ごと' },
+                    { value: 'daily' as ButlerSchedule, label: '毎日' },
+                    { value: 'manual' as ButlerSchedule, label: '手動のみ' },
+                  ]).map((opt) => (
+                    <button
+                      key={opt.value}
+                      disabled={!draft.butlerEnabled}
+                      onClick={() => update('butlerSchedule', opt.value)}
+                      className={`px-3 py-1.5 text-sm rounded transition-colors ${
+                        draft.butlerSchedule === opt.value
+                          ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30'
+                          : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* 3. Quarantine folder */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">スパム隔離先フォルダ名</label>
+                <input
+                  type="text"
+                  value={draft.butlerQuarantineFolder}
+                  onChange={(e) => update('butlerQuarantineFolder', e.target.value)}
+                  disabled={!draft.butlerEnabled}
+                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                  placeholder="隔離"
+                />
+                <p className="text-xs text-surface-500 mt-1">
+                  自動隔離したスパムをこのフォルダへ移動します（移動なので元に戻せます）
+                </p>
+              </div>
+
+              {/* 4. Auto-quarantine threshold */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">
+                  自動隔離の信頼度しきい値
+                  <span className="ml-2 text-accent-400 font-mono">{draft.butlerAutoQuarantineThreshold.toFixed(2)}</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-surface-500 w-10">慎重</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={draft.butlerAutoQuarantineThreshold}
+                    onChange={(e) => update('butlerAutoQuarantineThreshold', Number(e.target.value))}
+                    disabled={!draft.butlerEnabled}
+                    className="flex-1 accent-accent-500 h-1 disabled:cursor-not-allowed"
+                  />
+                  <span className="text-xs text-surface-500 w-10 text-right">積極</span>
+                </div>
+                <p className="text-xs text-surface-500 mt-1">
+                  この信頼度以上のスパムだけを自動隔離します。高いほど慎重（誤隔離が減ります）
+                </p>
+              </div>
+
+              {/* 5. Max budget per run */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">1回あたりの上限コスト (USD)</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.1}
+                  value={draft.butlerMaxBudgetUsdPerRun}
+                  onChange={(e) => update('butlerMaxBudgetUsdPerRun', Number(e.target.value))}
+                  disabled={!draft.butlerEnabled}
+                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                />
+                <p className="text-xs text-surface-500 mt-1">
+                  自動処理のAPI課金の上限です。この金額に達したら処理を打ち切ります
+                </p>
+              </div>
+
+              {/* 6. 対象アカウント */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">対象アカウント</label>
+                <p className="text-xs text-surface-500 mb-2">
+                  夜間執事に任せるアカウント。仕事用だけ選べば、プライベート（Gmail等）は手動のままになります。全部チェック＝選択中の全アカウント。
+                </p>
+                <div className="space-y-1.5">
+                  {accounts
+                    .filter((a) => draft.selectedAccounts.includes(a.email))
+                    .map((account) => (
+                      <label key={account.email} className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={draft.butlerAccounts.length === 0 || draft.butlerAccounts.includes(account.email)}
+                          onChange={() => toggleButlerAccount(account.email)}
+                          disabled={!draft.butlerEnabled}
+                          className="accent-accent-500"
+                        />
+                        <span className="text-surface-300">{account.email}</span>
+                      </label>
+                    ))}
+                  {accounts.filter((a) => draft.selectedAccounts.includes(a.email)).length === 0 && (
+                    <p className="text-xs text-surface-500">先に上の「アカウント」セクションで対象を選択してください。</p>
+                  )}
+                </div>
+              </div>
+
+              {/* 7. 1回あたりの処理上限 */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">1回あたりの処理上限（件 / アカウント）</label>
+                <input
+                  type="number"
+                  min={1}
+                  step={10}
+                  value={draft.butlerMaxPerAccount}
+                  onChange={(e) => update('butlerMaxPerAccount', Math.max(1, Number(e.target.value)))}
+                  disabled={!draft.butlerEnabled}
+                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                />
+                <p className="text-xs text-surface-500 mt-1">
+                  一度に大量のメールを動かすとIMAPが詰まるため、アカウントごとにこの件数で区切ります。超過分は次回の実行で処理されます。
+                </p>
               </div>
             </div>
           </div>

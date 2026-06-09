@@ -471,6 +471,14 @@ export interface AppSettings {
   customTags: MailTag[];
   // AI自動タグ付け
   autoTagEnabled: boolean;
+  // 夜間執事(自動パイプライン)
+  butlerEnabled: boolean;
+  butlerSchedule: ButlerSchedule;
+  butlerQuarantineFolder: string;        // スパム自動隔離先フォルダ名
+  butlerAutoQuarantineThreshold: number; // この信頼度(0-1)以上のスパムを自動隔離
+  butlerMaxBudgetUsdPerRun: number;      // 1バッチの課金上限(USD)
+  butlerAccounts: string[];              // 夜間執事の対象アカウント(空=選択中の全アカウント)
+  butlerMaxPerAccount: number;           // 1アカウント・1回あたりの処理上限(件)。IMAP負荷対策
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -498,7 +506,62 @@ export const DEFAULT_SETTINGS: AppSettings = {
   senderColorMode: 'text',
   customTags: [],
   autoTagEnabled: false,
+  butlerEnabled: false,
+  butlerSchedule: 'startup',
+  butlerQuarantineFolder: '隔離',
+  butlerAutoQuarantineThreshold: 0.95,
+  butlerMaxBudgetUsdPerRun: 0.5,
+  butlerAccounts: [],
+  butlerMaxPerAccount: 100,
 };
+
+// === Night Butler (自動パイプライン) ===
+
+export type ButlerSchedule = 'manual' | 'startup' | 'hourly' | 'daily';
+
+// パイプラインが1通に対して下した処理の種類
+// reversible(可逆)なものは自動実行済、await_* は不可逆ゆえ承認待ち
+export type ButlerActionKind =
+  | 'tagged'         // タグ付けした(可逆・自動実行済)
+  | 'quarantined'    // スパムを隔離フォルダへ移動(可逆・自動実行済)
+  | 'draft_prepared' // 返信下書きを用意(可逆・自動実行済、未送信)
+  | 'await_delete'   // 削除候補(不可逆・承認待ち)
+  | 'await_send'     // 送信候補(不可逆・承認待ち、下書きは用意済)
+  | 'skipped';       // 対象外
+
+// 1通に対する執事の処理結果
+export interface ButlerEntry {
+  mailId: number;
+  accountEmail: string;
+  subject: string;
+  from: string;
+  kind: ButlerActionKind;
+  reversible: boolean;   // true=自動実行済 / false=承認待ち
+  detail: string;        // 何をしたか/提案理由(根拠を一言)
+  tags?: string[];       // 付与したタグ
+  draft?: string;        // 用意した返信下書き(await_send/draft_prepared時)
+  confidence?: number;   // AI判定の信頼度(0-1)
+  createdAt: string;     // ISO8601
+}
+
+// 1バッチ(一晩)の作業報告
+export interface NightlyDigest {
+  runAt: string;                   // ISO8601 実行時刻
+  processedCount: number;          // 処理した新着数
+  autoDone: ButlerEntry[];         // 自動実行済(可逆) — 報告のみ
+  awaitingApproval: ButlerEntry[]; // 承認待ち(不可逆) — OK/NG
+  errors: string[];
+  costUsd: number;
+  running?: boolean;               // パイプライン実行中フラグ
+}
+
+// 承認アクション(UI → main)
+export interface ButlerApproval {
+  mailId: number;
+  accountEmail: string;
+  kind: 'delete' | 'send';
+  approved: boolean;     // true=実行 / false=破棄(却下)
+}
 
 // === IPC API ===
 export interface ElectronAPI {
@@ -605,6 +668,11 @@ export interface ElectronAPI {
     mails: { id: number; subject: string; preview: string; from: string }[];
     existingTags: Record<number, string[]>;
   }) => Promise<Record<number, string[]>>;
+  // Night Butler (自動パイプライン)
+  runButlerPipeline: (params?: { force?: boolean }) => Promise<NightlyDigest>;
+  getLatestDigest: () => Promise<NightlyDigest | null>;
+  approveButlerItem: (approval: ButlerApproval) => Promise<{ status: string; error?: string }>;
+  onDigestUpdated: (callback: (digest: NightlyDigest) => void) => () => void;
 }
 
 declare global {

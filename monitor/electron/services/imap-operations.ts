@@ -147,3 +147,96 @@ export async function moveToTrashBatch(
 
   return results;
 }
+
+/**
+ * Move a single mail to an arbitrary destination folder (e.g. a quarantine
+ * folder). Mirrors moveToTrash but targets `destFolderPath` and creates the
+ * destination mailbox if it does not exist. This is a *reversible* operation:
+ * the mail is relocated, never deleted — the user can drag it back.
+ */
+export async function moveToFolder(
+  mailId: number,
+  accountEmail: string,
+  credentials: ImapCredentials,
+  destFolderPath: string,
+): Promise<MoveToTrashResult> {
+  // Get RFC Message-ID from eM Client DB
+  const messageId = getMessageIdById(accountEmail, mailId);
+  if (!messageId) {
+    return { mailId, success: false, error: 'Message-IDが見つかりませんでした' };
+  }
+
+  const client = createClient(credentials);
+  try {
+    await client.connect();
+
+    // Ensure destination folder exists (idempotent — ignore "already exists").
+    try {
+      const existing = await client.list();
+      const hasDest = existing.some((f) => f.path === destFolderPath);
+      if (!hasDest) {
+        await client.mailboxCreate(destFolderPath);
+      }
+    } catch {
+      // Creation may fail if it already exists (race) — continue regardless.
+    }
+
+    let found = false;
+
+    // Search INBOX first (most common), then fall back to all other mailboxes.
+    const searchMailboxes = ['INBOX'];
+    for (const mailbox of searchMailboxes) {
+      try {
+        const lock = await client.getMailboxLock(mailbox);
+        try {
+          const result = (await client.search({
+            header: { 'Message-ID': messageId },
+          })) as number[];
+          if (result && result.length > 0) {
+            await client.messageMove(result, destFolderPath);
+            found = true;
+            break;
+          }
+        } finally {
+          lock.release();
+        }
+      } catch {
+        // Mailbox not accessible, skip
+      }
+    }
+
+    if (!found) {
+      const list = await client.list();
+      for (const folder of list) {
+        if (folder.path === destFolderPath) continue; // don't search the target
+        try {
+          const lock = await client.getMailboxLock(folder.path);
+          try {
+            const result = (await client.search({
+              header: { 'Message-ID': messageId },
+            })) as number[];
+            if (result && result.length > 0) {
+              await client.messageMove(result, destFolderPath);
+              found = true;
+              break;
+            }
+          } finally {
+            lock.release();
+          }
+        } catch {
+          // Skip inaccessible mailboxes
+        }
+      }
+    }
+
+    await client.logout();
+
+    if (!found) {
+      return { mailId, success: false, error: 'IMAPサーバーでメールが見つかりませんでした' };
+    }
+    return { mailId, success: true };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { mailId, success: false, error: msg };
+  }
+}
