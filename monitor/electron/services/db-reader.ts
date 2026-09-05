@@ -89,7 +89,7 @@ function findAccount(email: string): AccountConfig {
  */
 const TMP_DIR = path.join(os.tmpdir(), 'shirabe-snap');
 
-function openDb(
+export function openDb(
   accountUid: string,
   subdir: string,
   dbName: string,
@@ -217,14 +217,23 @@ export function getMails(accountEmail: string, daysBack: number): MailItem[] {
         address: string;
       }>;
 
-      const fromAddr = addrs.find((a) => a.type === 1);
+      const fromAddr = addrs.find((a) => a.type === AddressType.From);
       const toAddrs = addrs
-        .filter((a) => a.type === 3)
+        .filter((a) => a.type === AddressType.To)
         .map(
           (a): MailAddress => ({
             displayName: a.displayName,
             address: a.address,
-            type: 3 as AddressType,
+            type: AddressType.To,
+          }),
+        );
+      const ccAddrs = addrs
+        .filter((a) => a.type === AddressType.Cc)
+        .map(
+          (a): MailAddress => ({
+            displayName: a.displayName,
+            address: a.address,
+            type: AddressType.Cc,
           }),
         );
 
@@ -242,10 +251,11 @@ export function getMails(accountEmail: string, daysBack: number): MailItem[] {
           ? {
               displayName: fromAddr.displayName,
               address: fromAddr.address,
-              type: 1 as AddressType,
+              type: AddressType.From,
             }
           : null,
         to: toAddrs,
+        cc: ccAddrs,
         isRead: (row.flags & 2) !== 0,
         isFlagged: (row.flags & 4) !== 0,
         accountEmail,
@@ -442,9 +452,9 @@ export function searchMails(accountEmail: string, keyword: string, daysBack: num
 
     return rows.map((row) => {
       const addrs = addrStmt.all(row.id) as Array<{ type: number; displayName: string; address: string }>;
-      const fromAddr = addrs.find((a) => a.type === 1);
-      const toAddrs = addrs.filter((a) => a.type === 3).map((a): MailAddress => ({
-        displayName: a.displayName, address: a.address, type: 3 as AddressType,
+      const fromAddr = addrs.find((a) => a.type === AddressType.From);
+      const toAddrs = addrs.filter((a) => a.type === AddressType.To).map((a): MailAddress => ({
+        displayName: a.displayName, address: a.address, type: AddressType.To,
       }));
 
       return {
@@ -457,7 +467,7 @@ export function searchMails(accountEmail: string, keyword: string, daysBack: num
         flags: row.flags,
         folder: row.folder,
         folderName: folderMap.get(row.folder) ?? undefined,
-        from: fromAddr ? { displayName: fromAddr.displayName, address: fromAddr.address, type: 1 as AddressType } : null,
+        from: fromAddr ? { displayName: fromAddr.displayName, address: fromAddr.address, type: AddressType.From } : null,
         to: toAddrs,
         isRead: (row.flags & 2) !== 0,
         isFlagged: (row.flags & 4) !== 0,
@@ -527,9 +537,9 @@ export function getMailsByFolder(accountEmail: string, folderId: number, daysBac
 
     return rows.map((row) => {
       const addrs = addrStmt.all(row.id) as Array<{ type: number; displayName: string; address: string }>;
-      const fromAddr = addrs.find((a) => a.type === 1);
-      const toAddrs = addrs.filter((a) => a.type === 3).map((a): MailAddress => ({
-        displayName: a.displayName, address: a.address, type: 3 as AddressType,
+      const fromAddr = addrs.find((a) => a.type === AddressType.From);
+      const toAddrs = addrs.filter((a) => a.type === AddressType.To).map((a): MailAddress => ({
+        displayName: a.displayName, address: a.address, type: AddressType.To,
       }));
 
       return {
@@ -542,7 +552,7 @@ export function getMailsByFolder(accountEmail: string, folderId: number, daysBac
         flags: row.flags,
         folder: row.folder,
         folderName: folderMap.get(row.folder) ?? undefined,
-        from: fromAddr ? { displayName: fromAddr.displayName, address: fromAddr.address, type: 1 as AddressType } : null,
+        from: fromAddr ? { displayName: fromAddr.displayName, address: fromAddr.address, type: AddressType.From } : null,
         to: toAddrs,
         isRead: (row.flags & 2) !== 0,
         isFlagged: (row.flags & 4) !== 0,

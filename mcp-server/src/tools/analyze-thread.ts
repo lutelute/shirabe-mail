@@ -291,8 +291,8 @@ export function analyzeThread(params: AnalyzeThreadParams): ThreadAnalysis {
       }>;
 
       const fromAddr = addrs.find((a) => a.type === 1);
-      const toAddrs = addrs.filter((a) => a.type === 3);
-      const ccAddrs = addrs.filter((a) => a.type === 4);
+      const toAddrs = addrs.filter((a) => a.type === 4);
+      const ccAddrs = addrs.filter((a) => a.type === 5);
 
       if (fromAddr?.address) participantSet.add(fromAddr.address);
       for (const a of [...toAddrs, ...ccAddrs]) {

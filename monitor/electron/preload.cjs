@@ -174,6 +174,22 @@ const api = {
     ipcRenderer.on('digestUpdated', handler);
     return () => ipcRenderer.removeListener('digestUpdated', handler);
   },
+  // Night Butler v2
+  approveButlerGroup: (params) =>
+    ipcRenderer.invoke('approveButlerGroup', params),
+  updateButlerCase: (params) =>
+    ipcRenderer.invoke('updateButlerCase', params),
+  setButlerSenderRule: (params) =>
+    ipcRenderer.invoke('setButlerSenderRule', params),
+  getButlerRules: () =>
+    ipcRenderer.invoke('getButlerRules'),
+  generateCaseDraft: (params) =>
+    ipcRenderer.invoke('generateCaseDraft', params),
+  onButlerProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress);
+    ipcRenderer.on('butlerProgress', handler);
+    return () => ipcRenderer.removeListener('butlerProgress', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

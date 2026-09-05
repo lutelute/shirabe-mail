@@ -87,7 +87,7 @@ function searchCrossAccountSent(
           .all() as Array<{ id: number; subject: string; date: number }>;
 
         const addrStmt = db.prepare(
-          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
+          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 4, 5)`,
         );
 
         for (const row of rows) {
@@ -99,8 +99,8 @@ function searchCrossAccountSent(
               id: row.id,
               subject: row.subject ?? '',
               date: ticksToISO(row.date) ?? new Date(0).toISOString(),
-              to: addrs.filter((a) => a.type === 3).map((a) => formatAddress(a.displayName, a.address)),
-              cc: addrs.filter((a) => a.type === 4).map((a) => formatAddress(a.displayName, a.address)),
+              to: addrs.filter((a) => a.type === 4).map((a) => formatAddress(a.displayName, a.address)),
+              cc: addrs.filter((a) => a.type === 5).map((a) => formatAddress(a.displayName, a.address)),
               sourceAccount: acc.email,
             });
           }
@@ -294,7 +294,7 @@ export function getMailThread(params: MailThreadParams): ThreadResult {
     const { folderMap, sentFolderIds } = getFolderInfo(acc.accountUid, acc.mailSubdir);
 
     const addrStmt = db.prepare(
-      `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
+      `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 4, 5)`,
     );
 
     const participantSet = new Set<string>();
@@ -305,8 +305,8 @@ export function getMailThread(params: MailThreadParams): ThreadResult {
       }>;
 
       const fromAddr = addrs.find((a) => a.type === 1);
-      const toAddrs = addrs.filter((a) => a.type === 3);
-      const ccAddrs = addrs.filter((a) => a.type === 4);
+      const toAddrs = addrs.filter((a) => a.type === 4);
+      const ccAddrs = addrs.filter((a) => a.type === 5);
 
       if (fromAddr?.address) participantSet.add(fromAddr.address);
       for (const a of [...toAddrs, ...ccAddrs]) {
@@ -358,7 +358,7 @@ export function getMailThread(params: MailThreadParams): ThreadResult {
         }>;
 
         const addrStmt = db.prepare(
-          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
+          `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 4, 5)`,
         );
 
         for (const row of rows) {
@@ -370,8 +370,8 @@ export function getMailThread(params: MailThreadParams): ThreadResult {
               id: row.id,
               subject: row.subject ?? '',
               date: ticksToISO(row.date) ?? new Date(0).toISOString(),
-              to: addrs.filter((a) => a.type === 3).map((a) => formatAddress(a.displayName, a.address)),
-              cc: addrs.filter((a) => a.type === 4).map((a) => formatAddress(a.displayName, a.address)),
+              to: addrs.filter((a) => a.type === 4).map((a) => formatAddress(a.displayName, a.address)),
+              cc: addrs.filter((a) => a.type === 5).map((a) => formatAddress(a.displayName, a.address)),
               sourceAccount: acc.email,
             });
           }

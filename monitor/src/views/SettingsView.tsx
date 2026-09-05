@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAppContext } from '../context/AppContext';
 import { useImapOperations } from '../hooks/useImapOperations';
-import type { AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerSchedule } from '../types';
+import type { AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerSchedule, ButlerModel } from '../types';
 
 function getDefaultImapForAccount(email: string): Partial<ImapCredentials> {
   const domain = email.split('@')[1]?.toLowerCase() ?? '';
@@ -439,8 +439,10 @@ export default function SettingsView() {
           <div className="space-y-4">
             {/* Safety line — 先生の安心のため必ず明記 */}
             <div className="p-3 bg-accent-500/10 border border-accent-500/30 rounded text-xs text-surface-300 leading-relaxed">
-              タグ付け・フォルダ隔離・返信下書きの作成は自動で行います（すべて取り消せます）。
+              新着メールを案件ごとに読み、「何をすべきか・期限・優先度」を判定して返信下書きと朝の申し送りを用意します。
+              タグ付け・下書き作成は自動で行います（すべて取り消せます）。
               <span className="text-accent-400 font-medium">メールの削除と返信の送信は、必ずあなたの承認を求めます。</span>
+              <br />AI判定は Claude Code CLI 経由で動くため、Claude Code にログイン済みなら API キーは不要です。
             </div>
 
             {/* 1. Enable toggle */}
@@ -521,22 +523,77 @@ export default function SettingsView() {
                 </p>
               </div>
 
-              {/* 5. Max budget per run */}
-              <div>
-                <label className="block text-sm text-surface-200 mb-1">1回あたりの上限コスト (USD)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step={0.1}
-                  value={draft.butlerMaxBudgetUsdPerRun}
-                  onChange={(e) => update('butlerMaxBudgetUsdPerRun', Number(e.target.value))}
-                  disabled={!draft.butlerEnabled}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                />
-                <p className="text-xs text-surface-500 mt-1">
-                  自動処理のAPI課金の上限です。この金額に達したら処理を打ち切ります
-                </p>
+              {/* 5. モデル */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">判定に使うモデル</label>
+                  <select
+                    value={draft.butlerModel}
+                    onChange={(e) => update('butlerModel', e.target.value as ButlerModel)}
+                    disabled={!draft.butlerEnabled}
+                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                  >
+                    <option value="haiku">Haiku（速い・粗い）</option>
+                    <option value="sonnet">Sonnet（推奨）</option>
+                    <option value="opus">Opus（最も丁寧・遅い）</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">返信下書きに使うモデル</label>
+                  <select
+                    value={draft.butlerDraftModel}
+                    onChange={(e) => update('butlerDraftModel', e.target.value as ButlerModel)}
+                    disabled={!draft.butlerEnabled}
+                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                  >
+                    <option value="haiku">Haiku</option>
+                    <option value="sonnet">Sonnet（推奨）</option>
+                    <option value="opus">Opus（最も自然）</option>
+                  </select>
+                </div>
               </div>
+
+              {/* 5b. 量の上限 */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">初回に遡る日数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={draft.butlerInitialDays}
+                    onChange={(e) => update('butlerInitialDays', Math.max(1, Number(e.target.value)))}
+                    disabled={!draft.butlerEnabled}
+                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">1回の判定上限（案件）</label>
+                  <input
+                    type="number"
+                    min={5}
+                    step={5}
+                    value={draft.butlerMaxCasesPerRun}
+                    onChange={(e) => update('butlerMaxCasesPerRun', Math.max(5, Number(e.target.value)))}
+                    disabled={!draft.butlerEnabled}
+                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">1回の下書き上限（通）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    value={draft.butlerMaxDraftsPerRun}
+                    onChange={(e) => update('butlerMaxDraftsPerRun', Math.max(0, Number(e.target.value)))}
+                    disabled={!draft.butlerEnabled}
+                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-surface-500 -mt-2">
+                2回目以降は前回の実行以降の新着だけを読みます。上限を超えた案件は次回に回します（1案件あたり数秒）。
+              </p>
 
               {/* 6. 対象アカウント */}
               <div>

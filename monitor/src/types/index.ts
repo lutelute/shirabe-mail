@@ -22,6 +22,7 @@ export interface MailItem {
   folderName?: string;
   from: MailAddress | null;
   to: MailAddress[];
+  cc?: MailAddress[];
   isRead: boolean;
   isFlagged: boolean;
   accountEmail: string;
@@ -35,13 +36,14 @@ export interface MailAddress {
   type: AddressType;
 }
 
+// eM Client の MailAddresses.type の実値(DB実測: 1=From, 2=Sender, 3=Reply-To, 4=To, 5=Cc, 6=Bcc)
 export enum AddressType {
   From = 1,
   Sender = 2,
-  To = 3,
-  Cc = 4,
-  Bcc = 5,
-  ReplyTo = 6,
+  ReplyTo = 3,
+  To = 4,
+  Cc = 5,
+  Bcc = 6,
 }
 
 // === Calendar Event ===
@@ -479,6 +481,12 @@ export interface AppSettings {
   butlerMaxBudgetUsdPerRun: number;      // 1バッチの課金上限(USD)
   butlerAccounts: string[];              // 夜間執事の対象アカウント(空=選択中の全アカウント)
   butlerMaxPerAccount: number;           // 1アカウント・1回あたりの処理上限(件)。IMAP負荷対策
+  // 夜間執事 v2(案件ベース)
+  butlerModel: ButlerModel;              // 分類に使うモデル(Claude Code CLI経由・APIキー不要)
+  butlerDraftModel: ButlerModel;         // 返信下書きに使うモデル
+  butlerInitialDays: number;             // 初回実行で遡る日数(2回目以降は前回実行以降)
+  butlerMaxCasesPerRun: number;          // 1回でAI判定する案件数の上限
+  butlerMaxDraftsPerRun: number;         // 1回で用意する返信下書きの上限
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -513,11 +521,17 @@ export const DEFAULT_SETTINGS: AppSettings = {
   butlerMaxBudgetUsdPerRun: 0.5,
   butlerAccounts: [],
   butlerMaxPerAccount: 100,
+  butlerModel: 'sonnet',
+  butlerDraftModel: 'sonnet',
+  butlerInitialDays: 14,
+  butlerMaxCasesPerRun: 50,
+  butlerMaxDraftsPerRun: 5,
 };
 
 // === Night Butler (自動パイプライン) ===
 
 export type ButlerSchedule = 'manual' | 'startup' | 'hourly' | 'daily';
+export type ButlerModel = 'haiku' | 'sonnet' | 'opus';
 
 // パイプラインが1通に対して下した処理の種類
 // reversible(可逆)なものは自動実行済、await_* は不可逆ゆえ承認待ち
@@ -553,6 +567,110 @@ export interface NightlyDigest {
   errors: string[];
   costUsd: number;
   running?: boolean;               // パイプライン実行中フラグ
+  // --- v2: 案件ベース(秘書モデル) ---
+  version?: number;                // 2 = 案件ベース
+  cases?: ButlerCase[];            // 案件(スレッド単位)。前回の未完了案件も引き継ぐ
+  groups?: ButlerGroup[];          // 一括承認グループ(スパム削除など)
+  brief?: string;                  // 秘書の朝の一言(AI生成)
+  stats?: ButlerStats;
+}
+
+// === Night Butler v2: 案件(case)ベースの秘書モデル ===
+
+// 送信者の階層。DBの返信履歴・学習ルール・連絡先から決定論的に判定する
+export type SenderTier = 'vip' | 'internal' | 'known' | 'auto' | 'unknown' | 'noise';
+export type ButlerCaseCategory = 'reply' | 'action' | 'fyi' | 'noise' | 'spam' | 'unknown';
+export type ButlerPriority = 'P1' | 'P2' | 'P3' | 'P4';
+export type ButlerCaseStatus = 'open' | 'done' | 'later' | 'dismissed';
+
+export interface SenderStats {
+  received: number;    // 期間内に受信した数
+  replied: number;     // 先生が返信した数(eM ClientのreplyDate)
+  sentTo: number;      // 先生から送った数(送信済みのTo/Cc)
+  lastReplyAt?: string;
+}
+
+// 1案件 = 1スレッド(会話)。秘書が「先生は何をすべきか」を判断した単位
+export interface ButlerCase {
+  id: string;                 // `${accountEmail}::conv-${conversationId}` または `::mail-${mailId}`
+  accountEmail: string;
+  conversationId?: string;
+  mailId: number;             // 最新の受信メール
+  mailIds: number[];          // 今回処理した新着メール
+  subject: string;
+  from: string;               // 表示用 "名前 <addr>"
+  fromAddress: string;
+  fromName: string;
+  receivedAt: string;         // ISO8601
+  addressedToMe: 'to' | 'cc' | 'list' | 'unknown';
+  senderTier: SenderTier;
+  senderStats?: SenderStats;
+  threadCount: number;
+  myRepliesInThread: number;
+  lastFromMe: boolean;
+  // --- 判定結果 ---
+  category: ButlerCaseCategory;
+  priority: ButlerPriority;
+  ask: string;                // 先生がすべきこと(1文)
+  summary: string;            // 要約(1-2行)
+  deadline: string | null;    // YYYY-MM-DD
+  suggestedAction: string;    // 返信する / 日程回答 / 提出 / 支払い / 読むだけ など
+  reason: string;             // 根拠を一言
+  needsDraft: boolean;
+  draftHint?: string;
+  draft?: string;
+  draftStatus?: 'prepared' | 'skipped' | 'failed';
+  tags: string[];
+  noteId?: string;
+  status: ButlerCaseStatus;
+  statusChangedAt?: string;
+  aiSource: 'ai' | 'rule' | 'fallback';
+  createdAt: string;
+  runAt: string;
+}
+
+export interface ButlerGroupItem {
+  mailId: number;
+  accountEmail: string;
+  subject: string;
+  from: string;
+}
+
+// 一括承認グループ(不可逆な削除は必ずここを通す)
+export interface ButlerGroup {
+  id: string;
+  kind: 'spam_delete' | 'noise_list';
+  label: string;
+  reason: string;
+  accountEmail: string;
+  items: ButlerGroupItem[];
+  status: 'pending' | 'approved' | 'rejected' | 'failed';
+  error?: string;
+  createdAt: string;
+}
+
+export interface ButlerStats {
+  candidates: number;
+  cases: number;
+  p1: number;
+  p2: number;
+  p3: number;
+  noise: number;
+  spam: number;
+  drafts: number;
+  aiCalls: number;
+  durationMs: number;
+}
+
+// 学習ルール(先生の訂正で育つ)
+export interface ButlerSenderRule {
+  tier: 'vip' | 'noise';
+  note?: string;
+  updatedAt: string;
+}
+export interface ButlerRules {
+  senders: Record<string, ButlerSenderRule>;  // address(lowercase) → rule
+  domains: Record<string, ButlerSenderRule>;  // domain(lowercase) → rule
 }
 
 // 承認アクション(UI → main)
@@ -673,6 +791,13 @@ export interface ElectronAPI {
   getLatestDigest: () => Promise<NightlyDigest | null>;
   approveButlerItem: (approval: ButlerApproval) => Promise<{ status: string; error?: string }>;
   onDigestUpdated: (callback: (digest: NightlyDigest) => void) => () => void;
+  // Night Butler v2(案件ベース)
+  approveButlerGroup: (params: { groupId: string; approved: boolean }) => Promise<{ status: string; moved?: number; error?: string }>;
+  updateButlerCase: (params: { caseId: string; status: ButlerCaseStatus }) => Promise<{ status: string; error?: string }>;
+  setButlerSenderRule: (params: { address: string; tier: 'vip' | 'noise' | null; note?: string }) => Promise<ButlerRules>;
+  getButlerRules: () => Promise<ButlerRules>;
+  generateCaseDraft: (params: { caseId: string; instruction?: string }) => Promise<{ status: string; draft?: string; error?: string }>;
+  onButlerProgress: (callback: (progress: { stage: string; message: string; done?: number; total?: number }) => void) => () => void;
 }
 
 declare global {

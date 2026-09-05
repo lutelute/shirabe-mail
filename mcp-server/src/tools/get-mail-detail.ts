@@ -44,8 +44,8 @@ export function getMailDetail(params: MailDetailParams): MailDetail {
     }>;
 
     const fromAddr = addrs.find((a) => a.type === 1);
-    const toAddrs = addrs.filter((a) => a.type === 3);
-    const ccAddrs = addrs.filter((a) => a.type === 4);
+    const toAddrs = addrs.filter((a) => a.type === 4);
+    const ccAddrs = addrs.filter((a) => a.type === 5);
 
     // Get folder name
     const folderName = getFolderMap(acc.accountUid, acc.mailSubdir).get(row.folder) ?? '';

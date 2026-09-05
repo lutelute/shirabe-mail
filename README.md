@@ -25,6 +25,24 @@ shirabe-mail/
 
 ## Features
 
+### 🌙 夜間執事 v2（案件ベースの秘書モデル）
+新着メールを裏で読み、朝ダッシュボードを開いたときには「判断だけが残っている」状態にする。
+
+| 段階 | 内容 |
+|------|------|
+| 集める | 前回実行以降の未読（初回は N 日分）を受信箱相当のフォルダから取得 |
+| ふるう | サーバーの `[SPAM]` マーク・ブランド詐称・CFP/広告パターンを AI の前に除外 |
+| 束ねる | スレッド単位の「案件」にし、本文全文（引用・署名除去）、経緯、相手との付き合い（受信/返信/送信数）を添える |
+| 判断する | Claude が「先生は何をすべきか」「期限」「優先度 P1〜P4」「根拠」を構造化して返す |
+| 用意する | 返信が要る案件は、先生の実際の送信メールを文体見本にして下書きを作る（送信はしない） |
+| 報告する | 朝の申し送り＋案件カード＋迷惑メールの一括承認グループ |
+
+- **APIキー不要**: AI 判定は Claude Code CLI 経由（ログイン済みの資格情報を使う）。MCP/ツールを読み込まない軽量呼び出しで 1 案件あたり数秒
+- **人物像・判断ルールを毎回参照**: `~/.claude/skills/shirabe/references/{decision-rules,contacts}.md` と `userData/butler-profile.md`（任意）を読み込む
+- **学習する**: 案件カードの「この人は常に重要 / 不要」が `butler-rules.json` に残り、次回以降の判定に効く
+- **安全ライン**: 可逆（タグ・下書き・隔離）は自動、不可逆（削除・送信）は必ず承認。削除はゴミ箱移動のみ
+- 検証: `npm test`（純関数＋パイプライン）、`npm run butler:dryrun -- <account> <days> <maxCases> <maxDrafts>`（実DB読み取り＋実CLI、書き込みなし）
+
 ### 調 Dashboard
 起動時に表示される統合ダッシュボード。4象限レイアウトで状況を一覧。
 
@@ -141,6 +159,6 @@ npm run build
 
 - **Frontend**: Electron + React + TypeScript + Vite + Tailwind CSS
 - **DB Access**: better-sqlite3 (eM Client SQLite DB 直接読み取り)
-- **AI**: Claude Code CLI (分析・ドラフト生成)
+- **AI**: Claude Code CLI (夜間執事の判定・下書き・申し送り、分析、ドラフト生成)
 - **MCP**: @modelcontextprotocol/sdk (Claude Code 連携)
 - **IPC**: Electron contextBridge (renderer ↔ main プロセス通信)

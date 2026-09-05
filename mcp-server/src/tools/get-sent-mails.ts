@@ -60,7 +60,7 @@ function fetchSentForAccount(
     }>;
 
     const addrStmt = db.prepare(
-      `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 3, 4)`,
+      `SELECT type, displayName, address FROM MailAddresses WHERE parentId = ? AND type IN (1, 4, 5)`,
     );
 
     return rows.map((row) => {
@@ -68,8 +68,8 @@ function fetchSentForAccount(
         type: number; displayName: string; address: string;
       }>;
       const fromAddr = addrs.find((a) => a.type === 1);
-      const toAddrs = addrs.filter((a) => a.type === 3);
-      const ccAddrs = addrs.filter((a) => a.type === 4);
+      const toAddrs = addrs.filter((a) => a.type === 4);
+      const ccAddrs = addrs.filter((a) => a.type === 5);
 
       return {
         id: row.id,

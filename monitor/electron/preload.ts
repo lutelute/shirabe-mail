@@ -165,6 +165,22 @@ const api = {
     ipcRenderer.on('digestUpdated', handler);
     return () => ipcRenderer.removeListener('digestUpdated', handler);
   },
+  // Night Butler v2(案件ベース)
+  approveButlerGroup: (params: any) =>
+    ipcRenderer.invoke('approveButlerGroup', params),
+  updateButlerCase: (params: any) =>
+    ipcRenderer.invoke('updateButlerCase', params),
+  setButlerSenderRule: (params: any) =>
+    ipcRenderer.invoke('setButlerSenderRule', params),
+  getButlerRules: () =>
+    ipcRenderer.invoke('getButlerRules'),
+  generateCaseDraft: (params: any) =>
+    ipcRenderer.invoke('generateCaseDraft', params),
+  onButlerProgress: (callback: (progress: any) => void) => {
+    const handler = (_event: any, progress: any) => callback(progress);
+    ipcRenderer.on('butlerProgress', handler);
+    return () => ipcRenderer.removeListener('butlerProgress', handler);
+  },
   // Update notification listeners
   onUpdateAvailable: (callback: (info: any) => void) => {
     const handler = (_event: any, info: any) => callback(info);

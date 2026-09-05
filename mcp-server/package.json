@@ -1,6 +1,6 @@
 {
   "name": "shirabe-mcp-server",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "調 MCP Server - eM Client database tools for Claude Code",
   "type": "module",
   "scripts": {

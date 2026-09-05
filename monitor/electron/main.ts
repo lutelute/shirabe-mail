@@ -31,7 +31,14 @@ import {
 } from './services/project-reader';
 import { ticksToDate } from './services/tick-converter';
 import { runButlerPipeline } from './services/pipeline';
-import type { PipelineDeps } from './services/pipeline';
+import type { PipelineDeps, ButlerProgress } from './services/pipeline';
+import { getCandidateMails, getSenderStats, getThreadContext, getMailBodies, getSentExemplars } from './services/mail-intel';
+import { createClaudeRunner } from './services/claude-runner';
+import type { ClaudeRunner } from './services/claude-runner';
+import { buildJudgmentContext, classifyCases, draftReply, writeBrief } from './services/butler-brain';
+import type { JudgmentContext } from './services/butler-brain';
+import { loadRules, saveRules, withSenderRule } from './services/butler-rules';
+import type { ButlerRules, ButlerCaseStatus, SenderStats } from '../src/types/index';
 import type {
   AppSettings,
   MailItem,
@@ -494,12 +501,13 @@ function getThreadMessagesFromDb(
         address: string;
       }>;
 
+      // eM Client の実値: 1=From, 2=Sender, 3=Reply-To, 4=To, 5=Cc, 6=Bcc
       const fromAddr = addrs.find((a) => a.type === 1);
       const toAddrs = addrs
-        .filter((a) => a.type === 3)
+        .filter((a) => a.type === 4)
         .map((a) => a.address);
       const ccAddrs = addrs
-        .filter((a) => a.type === 4)
+        .filter((a) => a.type === 5)
         .map((a) => a.address);
       const folderName = folderMap.get(row.folder) ?? '';
 
@@ -919,6 +927,54 @@ function registerIpcHandlers(): void {
       fs.mkdirSync(NOTES_DIR, { recursive: true });
     }
   }
+
+  // --- v1 夜間執事の残骸を片付ける(一度だけ・可逆) ---
+  // v1 は AI が動かないまま 1 通ごとに「info」タグだけの空ノートを作り(実績 8,559 件)、
+  // 4MB のダイジェストを毎回 UI に流していた。中身のない執事ノートはアーカイブへ移動し、
+  // v1 形式のダイジェストも退避する。削除はしない(notes-archive-v1/ に残る)。
+  function archiveV1ButlerArtifacts(): void {
+    const marker = path.join(app.getPath('userData'), 'butler-v1-archived.json');
+    if (fs.existsSync(marker)) return;
+    const archiveDir = path.join(app.getPath('userData'), 'notes-archive-v1');
+    let moved = 0;
+    let kept = 0;
+    try {
+      ensureNotesDir();
+      const files = fs.readdirSync(NOTES_DIR).filter((f) => f.endsWith('.json'));
+      for (const f of files) {
+        const src = path.join(NOTES_DIR, f);
+        try {
+          const note = JSON.parse(fs.readFileSync(src, 'utf-8')) as {
+            content?: string; todos?: unknown[]; history?: Array<{ content?: string }>;
+          };
+          const empty = !(note.content ?? '').trim() && (note.todos ?? []).length === 0;
+          const hist = note.history ?? [];
+          const onlyButler = hist.length > 0 && hist.every((h) => String(h?.content ?? '').startsWith('夜間執事:'));
+          if (empty && onlyButler) {
+            if (!fs.existsSync(archiveDir)) fs.mkdirSync(archiveDir, { recursive: true });
+            fs.renameSync(src, path.join(archiveDir, f));
+            moved += 1;
+          } else {
+            kept += 1;
+          }
+        } catch {
+          kept += 1;
+        }
+      }
+      const digestPath = path.join(app.getPath('userData'), 'nightly-digest.json');
+      if (fs.existsSync(digestPath)) {
+        try {
+          const d = JSON.parse(fs.readFileSync(digestPath, 'utf-8')) as { version?: number };
+          if (d.version !== 2) fs.renameSync(digestPath, path.join(app.getPath('userData'), 'nightly-digest-v1.json'));
+        } catch { /* leave as is */ }
+      }
+      fs.writeFileSync(marker, JSON.stringify({ at: new Date().toISOString(), moved, kept }, null, 2), 'utf-8');
+      if (moved > 0) console.log(`[butler] archived ${moved} empty v1 notes (kept ${kept})`);
+    } catch (err) {
+      console.warn('[butler] v1 archive skipped:', (err as Error).message);
+    }
+  }
+  archiveV1ButlerArtifacts();
 
   ipcMain.handle('getNotes', (): unknown[] => {
     ensureNotesDir();
@@ -2174,27 +2230,80 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
     return { success: res.success, error: res.error };
   }
 
+  // --- v2: 材料(DB)と頭脳(Claude CLI) ---
+  const BUTLER_RULES_PATH = path.join(app.getPath('userData'), 'butler-rules.json');
+  const BUTLER_WORKDIR = path.join(app.getPath('userData'), 'butler-cwd');
+
+  let butlerRunner: ClaudeRunner | null = null;
+  function getButlerRunner(): ClaudeRunner {
+    if (!butlerRunner) {
+      butlerRunner = createClaudeRunner({
+        cliPath: CLAUDE_CLI_PATH,
+        env: cleanEnvForClaude(),
+        workDir: BUTLER_WORKDIR,
+        concurrency: 3,
+        log: (m) => console.log(m),
+      });
+    }
+    return butlerRunner;
+  }
+
+  function butlerContext(rules: ButlerRules): JudgmentContext {
+    return buildJudgmentContext(
+      { homeDir: os.homedir(), userDataDir: app.getPath('userData') },
+      rules,
+      getAccounts().map((a) => a.email),
+    );
+  }
+
+  // 送信者統計は重い集計なので 30 分キャッシュ
+  const senderStatsCache = new Map<string, { at: number; stats: Map<string, SenderStats> }>();
+  function cachedSenderStats(accountEmail: string): Map<string, SenderStats> {
+    const hit = senderStatsCache.get(accountEmail);
+    if (hit && Date.now() - hit.at < 30 * 60 * 1000) return hit.stats;
+    const stats = getSenderStats(accountEmail, 400);
+    senderStatsCache.set(accountEmail, { at: Date.now(), stats });
+    return stats;
+  }
+
+  function notifyDigest(digest: NightlyDigest): void {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('digestUpdated', digest);
+    }
+  }
+
   function buildPipelineDeps(): PipelineDeps {
+    const runner = getButlerRunner();
     return {
       loadSettings,
-      getMails,
-      detectJunk: async (mails, apiKey) => {
-        const s = loadSettings();
-        const whitelist = s.junkWhitelistDomains ?? [];
-        return apiKey
-          ? detectJunkWithAI(mails, apiKey, whitelist)
-          : detectJunkByKeywords(mails, whitelist);
-      },
-      triage: (mails, apiKey) => triageEmailsService(mails, apiKey),
-      getThreadMessages: getThreadMessagesFromDb,
-      generateReplyDraft: generateReplyDraftImpl,
+      loadRules: () => loadRules(BUTLER_RULES_PATH),
+      buildContext: butlerContext,
+      getCandidates: (accountEmail, q) =>
+        getCandidateMails(accountEmail, { since: q.since, limit: q.limit, excludeIds: q.excludeIds, unreadOnly: true }),
+      getSenderStats: cachedSenderStats,
+      getThread: (accountEmail, conversationId) =>
+        getThreadContext(accountEmail, conversationId, { maxMessages: 8, maxCharsPerMessage: 1200 }),
+      getBodies: (accountEmail, ids) => getMailBodies(accountEmail, ids, 1500),
+      getExemplars: (accountEmail) => getSentExemplars(accountEmail, 3),
+      classify: (ctx, inputs, model, onProgress) =>
+        classifyCases(runner, ctx, inputs, model, { batchSize: 6, onProgress }),
+      draft: (ctx, params, model) => draftReply(runner, ctx, params, model),
+      brief: (input, model) => writeBrief(runner, input, model),
       moveToQuarantine,
+      hasImapCredentials: (accountEmail) =>
+        !!loadSettings().imapConfigs.find((c) => c.accountEmail === accountEmail)?.credentials,
       getNote: readNote,
       saveNote: writeNote,
       butlerStatePath: BUTLER_STATE_PATH,
       digestPath: NIGHTLY_DIGEST_PATH,
       readJson: readJsonFile,
       writeJson: writeJsonFile,
+      onProgress: (p: ButlerProgress) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('butlerProgress', p);
+        }
+      },
+      log: (m) => console.log(m),
     };
   }
 
@@ -2296,6 +2405,138 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
       return { status: 'done' };
     }
     return { status: 'error', error: resultError };
+  });
+
+  // --- Night Butler v2: 案件・グループ・学習ルール ---
+
+  ipcMain.handle('getButlerRules', (): ButlerRules => loadRules(BUTLER_RULES_PATH));
+
+  ipcMain.handle('setButlerSenderRule', (_event, params: { address: string; tier: 'vip' | 'noise' | null; note?: string }): ButlerRules => {
+    const address = String(params?.address ?? '').trim().toLowerCase();
+    const rules = withSenderRule(loadRules(BUTLER_RULES_PATH), address, params?.tier ?? null, params?.note);
+    saveRules(BUTLER_RULES_PATH, rules);
+    // 「不要」指定なら、その送信者の未処理案件を今すぐ片付ける
+    if (params?.tier === 'noise' && address) {
+      const digest = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+      if (digest?.cases) {
+        let changed = false;
+        for (const c of digest.cases) {
+          if (c.fromAddress === address && (c.status === 'open' || c.status === 'later')) {
+            c.status = 'dismissed';
+            c.statusChangedAt = new Date().toISOString();
+            changed = true;
+          }
+        }
+        if (changed) {
+          writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+          notifyDigest(digest);
+        }
+      }
+    }
+    return rules;
+  });
+
+  ipcMain.handle('updateButlerCase', (_event, params: { caseId: string; status: ButlerCaseStatus }): { status: string; error?: string } => {
+    const digest = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+    if (!digest?.cases) return { status: 'error', error: 'ダイジェストが見つかりません' };
+    const c = digest.cases.find((x) => x.id === params?.caseId);
+    if (!c) return { status: 'error', error: '案件が見つかりません' };
+    const allowed: ButlerCaseStatus[] = ['open', 'done', 'later', 'dismissed'];
+    if (!allowed.includes(params.status)) return { status: 'error', error: '不正なステータスです' };
+    c.status = params.status;
+    c.statusChangedAt = new Date().toISOString();
+    // 対応済みならノートのタグも「対応済」に(可逆)
+    if (params.status === 'done' && c.noteId) {
+      const note = readNote(c.noteId);
+      if (note) {
+        note.tags = [...(note.tags ?? []).filter((t) => !['reply', 'action', 'urgent'].includes(t)), 'done'];
+        note.history = [...(note.history ?? []), { timestamp: new Date().toISOString(), type: 'updated', content: '夜間執事レポートで対応済みにしました' }];
+        note.updatedAt = new Date().toISOString();
+        writeNote(note);
+      }
+    }
+    writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+    notifyDigest(digest);
+    return { status: 'done' };
+  });
+
+  ipcMain.handle('generateCaseDraft', async (_event, params: { caseId: string; instruction?: string }): Promise<{ status: string; draft?: string; error?: string }> => {
+    const digest = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+    const c = digest?.cases?.find((x) => x.id === params?.caseId);
+    if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
+    try {
+      const settings = loadSettings();
+      const ctx = butlerContext(loadRules(BUTLER_RULES_PATH));
+      const thread = c.conversationId
+        ? getThreadContext(c.accountEmail, c.conversationId, { maxMessages: 8, maxCharsPerMessage: 1200 })
+        : null;
+      let exemplars: string[] = [];
+      try { exemplars = getSentExemplars(c.accountEmail, 3); } catch { /* optional */ }
+      const res = await draftReply(getButlerRunner(), ctx, {
+        subject: c.subject,
+        fromName: c.fromName,
+        fromAddress: c.fromAddress,
+        thread: thread?.messages ?? [],
+        exemplars,
+        ask: c.ask,
+        draftHint: c.draftHint,
+        instruction: params?.instruction,
+        existingDraft: params?.instruction ? c.draft : undefined,
+      }, settings.butlerDraftModel || settings.butlerModel || 'sonnet');
+      if (!res.ok) return { status: 'error', error: res.error ?? '下書きの生成に失敗しました' };
+      c.draft = res.draft;
+      c.draftStatus = 'prepared';
+      writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+      notifyDigest(digest);
+      return { status: 'done', draft: res.draft };
+    } catch (err) {
+      return { status: 'error', error: (err as Error).message };
+    }
+  });
+
+  ipcMain.handle('approveButlerGroup', async (_event, params: { groupId: string; approved: boolean }): Promise<{ status: string; moved?: number; error?: string }> => {
+    const digest = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
+    const g = digest?.groups?.find((x) => x.id === params?.groupId);
+    if (!digest || !g) return { status: 'error', error: 'グループが見つかりません' };
+    if (!params.approved) {
+      g.status = 'rejected';
+      writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+      notifyDigest(digest);
+      return { status: 'done' };
+    }
+    if (g.kind !== 'spam_delete') {
+      g.status = 'approved';
+      writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+      notifyDigest(digest);
+      return { status: 'done' };
+    }
+    // 安全ライン: 削除 = ゴミ箱へ移動のみ(完全削除はしない)
+    const settings = loadSettings();
+    const imapConfig = settings.imapConfigs.find((c) => c.accountEmail === g.accountEmail);
+    if (!imapConfig?.credentials) {
+      return { status: 'error', error: 'IMAP認証情報が未設定です。設定 → IMAP でこのアカウントを設定するとゴミ箱へ移動できます。' };
+    }
+    try {
+      const { moveManyToTrash } = await import('./services/imap-operations');
+      const results = await moveManyToTrash(g.items.map((i) => i.mailId), g.accountEmail, imapConfig.credentials, imapConfig.trashFolderPath);
+      const moved = results.filter((r) => r.success).length;
+      if (moved === 0) {
+        g.status = 'failed';
+        g.error = results[0]?.error ?? '移動できませんでした';
+      } else {
+        g.status = 'approved';
+        if (moved < g.items.length) g.error = `${g.items.length - moved}通は移動できませんでした`;
+      }
+      writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+      notifyDigest(digest);
+      return moved > 0 ? { status: 'done', moved, error: g.error } : { status: 'error', moved, error: g.error };
+    } catch (err) {
+      g.status = 'failed';
+      g.error = (err as Error).message;
+      writeJsonFile(NIGHTLY_DIGEST_PATH, digest);
+      notifyDigest(digest);
+      return { status: 'error', error: g.error };
+    }
   });
 
   // --- AI auto-tagging ---

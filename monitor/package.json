@@ -1,6 +1,6 @@
 {
   "name": "shirabe",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "調 - メール分析・AI分類デスクトップアプリ (eM Client)",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "electron:dev": "concurrently \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "electron:build": "vite build && electron-builder",
-    "rebuild": "npx electron-rebuild -f -w better-sqlite3,node-pty"
+    "rebuild": "npx electron-rebuild -f -w better-sqlite3,node-pty",
+    "test": "bash scripts/run-tests.sh",
+    "butler:dryrun": "bash scripts/run-dryrun.sh"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.77",
