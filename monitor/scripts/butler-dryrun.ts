@@ -42,6 +42,7 @@ const runner = createClaudeRunner({
   workDir: path.join(OUT_DIR, 'cwd'),
   concurrency: 3,
   log: (m) => console.error(m),
+  getEffort: () => settings.butlerEffort || 'xhigh',
 });
 
 const statsCache = new Map<string, ReturnType<typeof getSenderStats>>();

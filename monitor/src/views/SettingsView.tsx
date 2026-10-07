@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../context/AppContext';
 import type {
-  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel,
+  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel, ButlerEffort,
   PartnerMode, AccountSmtpConfig, SmtpCredentials, AccountEndpoints,
 } from '../types';
 
@@ -660,18 +660,32 @@ export default function SettingsView() {
                       <label className="block text-sm text-surface-200 mb-1">判定に使うモデル</label>
                       <select value={draft.butlerModel} onChange={(e) => update('butlerModel', e.target.value as ButlerModel)} className={inputCls}>
                         <option value="haiku">Haiku(速い・粗い)</option>
-                        <option value="sonnet">Sonnet(推奨)</option>
-                        <option value="opus">Opus(最も丁寧・遅い)</option>
+                        <option value="sonnet">Sonnet(速い)</option>
+                        <option value="opus">Opus 5.5(推奨・最も丁寧)</option>
                       </select>
                     </div>
                     <div>
                       <label className="block text-sm text-surface-200 mb-1">下書きに使うモデル</label>
                       <select value={draft.butlerDraftModel} onChange={(e) => update('butlerDraftModel', e.target.value as ButlerModel)} className={inputCls}>
                         <option value="haiku">Haiku</option>
-                        <option value="sonnet">Sonnet(推奨)</option>
-                        <option value="opus">Opus(最も自然)</option>
+                        <option value="sonnet">Sonnet(速い)</option>
+                        <option value="opus">Opus 5.5(推奨・最も自然)</option>
                       </select>
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-surface-200 mb-1">考える深さ(effort)</label>
+                    <div className="flex flex-wrap gap-2">
+                      {([
+                        { value: 'medium' as ButlerEffort, label: 'medium' },
+                        { value: 'high' as ButlerEffort, label: 'high' },
+                        { value: 'xhigh' as ButlerEffort, label: 'xhigh(推奨)' },
+                        { value: 'max' as ButlerEffort, label: 'max(最も深い・遅い)' },
+                      ]).map((opt) => (
+                        <button key={opt.value} type="button" onClick={() => update('butlerEffort', opt.value)} className={`px-3 py-1.5 text-sm rounded transition-colors ${draft.butlerEffort === opt.value ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30' : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'}`}>{opt.label}</button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-surface-500 mt-1">Claude CLI の --effort。判定・下書き・申し送り・作業指示書のすべてに効きます。深いほど丁寧ですが 1 回の確認が長くなります。</p>
                   </div>
                   <div className="grid grid-cols-3 gap-3">
                     <div>

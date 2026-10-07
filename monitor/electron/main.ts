@@ -351,6 +351,14 @@ function loadSettings(): AppSettings {
     }
   }
 
+  // v3.1.5: 相棒の既定モデルを Opus(5.5)・effort xhigh に。初めて effort 欄を見る設定ファイルだけ 1 回移行する
+  if ((raw as Partial<AppSettings>).butlerEffort === undefined) {
+    raw.butlerModel = 'opus';
+    raw.butlerDraftModel = 'opus';
+    raw.butlerEffort = 'xhigh';
+    try { persistSettings(raw); console.log('[settings] migrated butler model → opus / effort xhigh'); } catch (err) { console.warn('[settings] migration failed:', (err as Error).message); }
+  }
+
   const { settings: decrypted } = transformImapPasswords(raw, decryptSecret);
   return decrypted;
 }
@@ -2263,6 +2271,7 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
         workDir: BUTLER_WORKDIR,
         concurrency: 3,
         log: (m) => console.log(m),
+        getEffort: () => loadSettings().butlerEffort || 'xhigh',
       });
     }
     return butlerRunner;

@@ -18,6 +18,7 @@ export interface ClaudeRunnerConfig {
   workDir: string;          // 空の作業ディレクトリ(存在しなければ作る)
   concurrency?: number;     // 同時実行数(既定2)
   log?: (msg: string) => void;
+  getEffort?: () => string | undefined;   // 呼び出しごとに評価(設定変更を即反映)。'medium'|'high'|'xhigh'|'max'
 }
 
 export interface StructuredCall {
@@ -27,6 +28,7 @@ export interface StructuredCall {
   schema?: object;          // JSON Schema。省略時はテキスト応答
   timeoutMs?: number;
   label?: string;           // ログ用
+  effort?: string;          // 個別指定(省略時は runner の getEffort)
 }
 
 export interface RunResult<T> {
@@ -161,6 +163,8 @@ export function createClaudeRunner(cfg: ClaudeRunnerConfig): ClaudeRunner {
         '--no-session-persistence',
         '--system-prompt', call.systemPrompt,
       ];
+      const effort = call.effort ?? cfg.getEffort?.();
+      if (effort) args.push('--effort', effort);
       if (mcpConfigPath) args.push('--mcp-config', mcpConfigPath);
       if (call.schema) args.push('--json-schema', JSON.stringify(call.schema));
 

@@ -485,6 +485,7 @@ export interface AppSettings {
   // 夜間執事 v2(案件ベース)
   butlerModel: ButlerModel;              // 分類に使うモデル(Claude Code CLI経由・APIキー不要)
   butlerDraftModel: ButlerModel;         // 返信下書きに使うモデル
+  butlerEffort: ButlerEffort;            // 考える深さ(Claude CLI --effort)。既定 xhigh
   butlerInitialDays: number;             // 初回実行で遡る日数(2回目以降は前回実行以降)
   butlerMaxCasesPerRun: number;          // 1回でAI判定する案件数の上限
   butlerMaxDraftsPerRun: number;         // 1回で用意する返信下書きの上限
@@ -532,8 +533,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   butlerMaxBudgetUsdPerRun: 0.5,
   butlerAccounts: [],
   butlerMaxPerAccount: 100,
-  butlerModel: 'sonnet',
-  butlerDraftModel: 'sonnet',
+  butlerModel: 'opus',
+  butlerDraftModel: 'opus',
+  butlerEffort: 'xhigh',
   butlerInitialDays: 14,
   butlerMaxCasesPerRun: 50,
   butlerMaxDraftsPerRun: 5,
@@ -552,6 +554,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 
 export type ButlerSchedule = 'manual' | 'startup' | 'hourly' | 'daily';
 export type ButlerModel = 'haiku' | 'sonnet' | 'opus';
+export type ButlerEffort = 'medium' | 'high' | 'xhigh' | 'max';   // Claude CLI の --effort
 
 // パイプラインが1通に対して下した処理の種類
 // reversible(可逆)なものは自動実行済、await_* は不可逆ゆえ承認待ち
