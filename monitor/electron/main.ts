@@ -331,9 +331,11 @@ function persistSettings(settings: AppSettings): void {
 // Returns settings with IMAP passwords decrypted (plaintext for in-process use).
 function loadSettings(): AppSettings {
   let raw: AppSettings;
+  let parsed: Partial<AppSettings>;
   try {
     const data = fs.readFileSync(settingsPath(), 'utf-8');
-    raw = { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+    parsed = JSON.parse(data) as Partial<AppSettings>;
+    raw = { ...DEFAULT_SETTINGS, ...parsed };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -352,7 +354,8 @@ function loadSettings(): AppSettings {
   }
 
   // v3.1.5: 相棒の既定モデルを Opus(5.5)・effort xhigh に。初めて effort 欄を見る設定ファイルだけ 1 回移行する
-  if ((raw as Partial<AppSettings>).butlerEffort === undefined) {
+  // (DEFAULT_SETTINGS を被せた後では常に値があるので、ファイルの生の内容で判定する)
+  if (parsed.butlerEffort === undefined) {
     raw.butlerModel = 'opus';
     raw.butlerDraftModel = 'opus';
     raw.butlerEffort = 'xhigh';
