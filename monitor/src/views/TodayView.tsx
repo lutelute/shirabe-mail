@@ -7,7 +7,9 @@ import CaseDetail from '../components/partner/CaseDetail';
 import { OutboxDetail, FollowUpDetail, GroupDetail, JournalDetail } from '../components/partner/OtherDetails';
 import { buildQueue, flattenQueue, SECTION_ORDER } from '../components/partner/queue';
 import type { QueueItem, Section } from '../components/partner/queue';
-import { groupQueue, useToast, useMediaQuery, todayLabel, fmtTime, Icon, HANDOFF_TARGET_LABEL } from '../components/partner/partnerUi';
+import { groupQueue, useToast, useMediaQuery, todayLabel, fmtTime, Icon, HANDOFF_TARGET_LABEL, SECTION_TONE_META } from '../components/partner/partnerUi';
+import type { SectionTone } from '../components/partner/partnerUi';
+import type { MascotMode } from '../components/partner/Mascot';
 
 // =====================================================================
 // 「今日」 — 机の上の相棒。
@@ -29,6 +31,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   const [loaded, setLoaded] = useState(false);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<Progress | null>(null);
+  const [mascotFlash, setMascotFlash] = useState<'done' | 'error' | null>(null);   // 実行直後の 2 秒だけ
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [editRequest, setEditRequest] = useState(0);
@@ -61,18 +64,24 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
       setRunning(!!s.running);
       if (!s.running) setBusy(new Set());
     });
+    let flashTimer: ReturnType<typeof setTimeout> | null = null;
     const un2 = window.electronAPI.onButlerProgress((p) => {
       setProgress(p);
       if (p.stage === 'done' || p.stage === 'error') {
         setRunning(false);
-        setTimeout(() => setProgress(null), 4000);
+        setMascotFlash(p.stage);
+        if (flashTimer) clearTimeout(flashTimer);
+        flashTimer = setTimeout(() => { setMascotFlash(null); setProgress(null); }, p.stage === 'error' ? 6000 : 2200);
         void refresh();
       } else {
+        setMascotFlash(null);
         setRunning(true);
       }
     });
-    return () => { mounted.current = false; un1(); un2(); };
+    return () => { mounted.current = false; un1(); un2(); if (flashTimer) clearTimeout(flashTimer); };
   }, [refresh]);
+
+  const mascotMode: MascotMode = running ? 'working' : mascotFlash ?? 'idle';
 
   useEffect(() => {
     try { localStorage.setItem(LS_OPEN_KEY, JSON.stringify(openSections)); } catch { /* ignore */ }
@@ -268,14 +277,16 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   // ---- 上部の要約チップ(クリックで該当セクションへ) ----
   const missingCases = useMemo(() => groups.cases.filter((c) => c.status === 'open' && !!c.event && c.calendarStatus === 'missing'), [groups]);
   type SummaryKey = Section | 'missing';
+  type SummaryTone = SectionTone | 'danger-outline';
   const summary = useMemo(() => ([
     { key: 'decide' as SummaryKey, label: '決める', n: groups.decisions.length, tone: 'danger' },
     { key: 'send' as SummaryKey, label: '送る', n: groups.sendables.length, tone: 'primary' },
     { key: 'act' as SummaryKey, label: 'やる', n: groups.actions.length, tone: 'ink' },
-    { key: 'outbox' as SummaryKey, label: '送信予定', n: groups.outboxActive.length, tone: 'ink' },
-    { key: 'followup' as SummaryKey, label: '返事待ち', n: groups.followActive.length, tone: 'ink' },
-    { key: 'missing' as SummaryKey, label: '未登録', n: missingCases.length, tone: 'danger' },
-  ] as Array<{ key: SummaryKey; label: string; n: number; tone: 'danger' | 'primary' | 'ink' }>).filter((s) => s.n > 0), [groups, missingCases]);
+    { key: 'outbox' as SummaryKey, label: '送信予定', n: groups.outboxActive.length, tone: 'primary' },
+    { key: 'followup' as SummaryKey, label: '返事待ち', n: groups.followActive.length, tone: 'warn' },
+    { key: 'missing' as SummaryKey, label: '未登録', n: missingCases.length, tone: 'danger-outline' },
+  ] as Array<{ key: SummaryKey; label: string; n: number; tone: SummaryTone }>).filter((s) => s.n > 0), [groups, missingCases]);
+  const chipClass = (tone: SummaryTone) => (tone === 'danger-outline' ? 'bg-card text-danger border-danger/50 hover:bg-danger-soft' : SECTION_TONE_META[tone].chip);
 
   const sectionOf = useCallback((c: ButlerCase): Section => (
     groups.decisions.includes(c) ? 'decide' : groups.sendables.includes(c) ? 'send' : groups.actions.includes(c) ? 'act' : groups.fyi.includes(c) ? 'fyi' : 'later'
@@ -413,17 +424,19 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           <p className="text-[12px] text-ink-2 mt-0.5">{state?.nextRunAt ? `次は ${fmtTime(state.nextRunAt)} に確認します。` : '新着があれば「今すぐ確認」で読みに行きます。'}</p>
         </div>
       )}
-      {sections.map((s) => (
+      {sections.map((s) => {
+        const tone = SECTION_TONE_META[s.tone];
+        return (
         <section key={s.section}>
-          <div className="sticky top-0 z-10 bg-card/95 backdrop-blur border-b border-hairline" data-section={s.section}>
+          <div className={`sticky top-0 z-10 sec-band ${tone.band}`} data-section={s.section}>
             <button
               onClick={() => s.collapsible && toggleSection(s.section)}
-              className={`w-full flex items-center gap-2 px-4 h-9 text-left ${s.collapsible ? 'hover:bg-card-2' : 'cursor-default'}`}
+              className={`w-full flex items-center gap-2 px-4 h-8 text-left ${s.collapsible ? 'hover:brightness-[0.98]' : 'cursor-default'}`}
             >
-              {s.collapsible && <span className={`text-ink-3 transition-transform ${openSections[s.section] ? 'rotate-90' : ''}`}>{Icon.chevronRight}</span>}
-              <span className="text-[12.5px] font-semibold text-ink">{s.label}</span>
-              <span className={`tnum text-[11px] px-1.5 h-[18px] inline-flex items-center rounded-full ${s.section === 'decide' && s.count > 0 ? 'bg-warn-soft text-warn' : 'bg-card-2 text-ink-2'}`}>{s.count}</span>
-              {s.hint && <span className="ml-auto text-[11px] text-ink-3 font-normal truncate">{s.hint}</span>}
+              {s.collapsible && <span className={`opacity-70 transition-transform ${openSections[s.section] ? 'rotate-90' : ''}`}>{Icon.chevronRight}</span>}
+              <span className="text-[12px] font-bold tracking-wide">{s.label}</span>
+              <span className={`tnum text-[10.5px] min-w-[18px] px-1.5 h-[17px] inline-flex items-center justify-center rounded-full font-semibold ${s.count > 0 ? tone.badge : 'bg-card-2 text-ink-3'}`}>{s.count}</span>
+              {s.hint && <span className="ml-auto text-[11px] opacity-70 font-normal truncate">{s.hint}</span>}
             </button>
           </div>
           {s.items.length === 0 && !s.collapsible && (
@@ -440,7 +453,8 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           ))}
           </div>
         </section>
-      ))}
+        );
+      })}
       {SECTION_ORDER.length > 0 && digest?.sources && digest.sources.length > 0 && (
         <p className="px-4 py-3 text-[10.5px] text-ink-3">参照: {digest.sources.join(', ')} · j/k 移動 · Enter 主操作 · l 後で · x しない · e 下書き · 1〜4 決める · w 作業 · d eM Client 下書き</p>
       )}
@@ -453,7 +467,8 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 bg-ink text-paper rounded-md text-[12.5px] shadow-card">{toast}</div>
       )}
 
-      <div className="px-6 pt-4 pb-4 flex-shrink-0">
+      {/* ゾーン A: 相棒(見出し・要約・しらべ・申し送り)。和紙より少し濃い帯の上に白カード */}
+      <div className="px-6 pt-4 pb-5 flex-shrink-0 bg-paper-2 border-b border-hairline">
         <div className="flex items-center gap-4 mb-3">
           <h1 className="text-[22px] font-semibold text-ink tracking-tight flex-shrink-0">今日</h1>
           <div className="flex items-center gap-1.5 flex-wrap min-w-0">
@@ -462,11 +477,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
                 key={s.key}
                 onClick={() => jumpTo(s.key)}
                 title={`${s.label}へ`}
-                className={`app-no-drag inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border text-[11.5px] transition-colors ${
-                  s.tone === 'danger' ? 'bg-danger-soft text-danger border-danger/30 hover:border-danger/60'
-                    : s.tone === 'primary' ? 'bg-primary-soft text-primary border-primary/30 hover:border-primary/60'
-                      : 'bg-card text-ink-2 border-hairline hover:border-hairline-2 hover:text-ink'
-                }`}
+                className={`app-no-drag inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border text-[11.5px] transition-colors ${chipClass(s.tone)}`}
               >
                 <span>{s.label}</span>
                 <span className="tnum font-semibold">{s.n}</span>
@@ -476,13 +487,14 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           <span className="ml-auto text-[12.5px] text-ink-2 flex-shrink-0">{todayLabel()}</span>
         </div>
         <BriefCard
-          digest={digest} loaded={loaded} running={running} progress={progress}
+          digest={digest} loaded={loaded} running={running} progress={progress} mascotMode={mascotMode}
           lastRunAt={state?.lastRunAt ?? null} nextRunAt={state?.nextRunAt ?? null}
           mode={mode} manual={!settings.partnerIntervalMinutes} onRunNow={runNow} onSettings={() => onNavigate('settings')}
         />
       </div>
 
-      <div className="flex-1 min-h-0 mx-6 mb-6 flex gap-4">
+      {/* ゾーン B(キュー)/ C(詳細): A との間 20px、B と C の間 16px */}
+      <div className="flex-1 min-h-0 mx-6 mt-5 mb-6 flex gap-4">
         <div className={`${wide ? 'w-[440px] flex-shrink-0' : 'w-full'} h-full rounded-xl border border-hairline overflow-hidden bg-card shadow-card`}>
           {list}
         </div>

@@ -57,7 +57,7 @@ const TOOLS: NavItem[] = [
   { view: 'chat', label: 'Chat', icon: I.chat },
 ];
 
-function RailButton({ active, label, icon, onClick, badge }: { active: boolean; label: string; icon: JSX.Element; onClick: () => void; badge?: number }) {
+function RailButton({ active, label, icon, onClick, badge, working }: { active: boolean; label: string; icon: JSX.Element; onClick: () => void; badge?: number; working?: boolean }) {
   return (
     <button
       onClick={onClick}
@@ -70,6 +70,9 @@ function RailButton({ active, label, icon, onClick, badge }: { active: boolean; 
       {badge !== undefined && badge > 0 && (
         <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-danger text-white text-[10px] leading-4 text-center tnum font-medium">{badge > 99 ? '99+' : badge}</span>
       )}
+      {working && (
+        <span className="mascot-dot absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full bg-claw" title="相棒が確認しています" aria-hidden="true" />
+      )}
       <span className="rail-tip absolute left-12 top-1/2 -translate-y-1/2 z-40 px-2 py-1 rounded bg-ink text-paper text-[11px] whitespace-nowrap shadow-card">{label}</span>
     </button>
   );
@@ -77,6 +80,7 @@ function RailButton({ active, label, icon, onClick, badge }: { active: boolean; 
 
 export default function Sidebar({ activeView, onNavigate }: SidebarProps) {
   const [pending, setPending] = useState(0);
+  const [working, setWorking] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
   const popRef = useRef<HTMLDivElement | null>(null);
   const toolActive = TOOLS.some((t) => t.view === activeView);
@@ -84,9 +88,10 @@ export default function Sidebar({ activeView, onNavigate }: SidebarProps) {
   // 「今日」の未処理件数(決める+送る+やる)
   useEffect(() => {
     let alive = true;
-    window.electronAPI.partnerGetState().then((s) => { if (alive) setPending(groupQueue(s).pending); }).catch(() => undefined);
-    const un = window.electronAPI.onPartnerState((s) => { if (alive) setPending(groupQueue(s).pending); });
-    return () => { alive = false; un(); };
+    window.electronAPI.partnerGetState().then((s) => { if (alive) { setPending(groupQueue(s).pending); setWorking(!!s.running); } }).catch(() => undefined);
+    const un = window.electronAPI.onPartnerState((s) => { if (alive) { setPending(groupQueue(s).pending); setWorking(!!s.running); } });
+    const un2 = window.electronAPI.onButlerProgress((p) => { if (alive) setWorking(p.stage !== 'done' && p.stage !== 'error'); });
+    return () => { alive = false; un(); un2(); };
   }, []);
 
   useEffect(() => {
@@ -101,7 +106,7 @@ export default function Sidebar({ activeView, onNavigate }: SidebarProps) {
   return (
     <nav className="w-14 flex-shrink-0 bg-paper border-r border-hairline flex flex-col items-center py-2 gap-1 relative">
       {MAIN.map((item) => (
-        <RailButton key={item.view} active={activeView === item.view} label={item.label} icon={item.icon} onClick={() => onNavigate(item.view)} badge={item.view === 'today' ? pending : undefined} />
+        <RailButton key={item.view} active={activeView === item.view} label={item.label} icon={item.icon} onClick={() => onNavigate(item.view)} badge={item.view === 'today' ? pending : undefined} working={item.view === 'today' ? working : undefined} />
       ))}
       <div className="w-6 border-t border-hairline my-1" />
       <div ref={popRef} className="relative">

@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { ButlerCase, ButlerCaseStatus, HandoffTarget } from '../../types';
 import { openInEmClient } from '../../utils/openInEmClient';
 import type { CaseVariant } from './queue';
-import { Chip, DeadlineChip, PrimaryButton, SubtleButton, GhostButton, Spinner, AutoTextarea, Icon, PRIORITY_META, CATEGORY_META, TIER_META, fmtDateTime, fmtTime, fmtEvent, HANDOFF_TARGET_LABEL } from './partnerUi';
+import { Chip, DeadlineChip, PrimaryButton, SubtleButton, GhostButton, Spinner, AutoTextarea, Icon, ZoneLabel, PRIORITY_META, CATEGORY_META, TIER_META, fmtDateTime, fmtTime, fmtEvent, HANDOFF_TARGET_LABEL } from './partnerUi';
 
 // =====================================================================
-// 案件の詳細パネル: 件名 → メタ(差出人・受信・関係・期限・予定) → 先生がすること → 要約/根拠 → 決める → (作業に移る) → 下書き → 操作
+// 案件の詳細パネル — 上から 6 つのゾーン(各 11px の見出しラベル、間隔 16px):
+//   案件(件名・メタ・予定) → すること(藍の左罫線) → 決める(山吹の帯) → 下書き(白、編集中は藍の枠) → 作業に移る(灰の帯) → 操作(フッタ)
 //   文章は detail-prose(760px)に収める。操作フッタは常に見える。
 // =====================================================================
 
@@ -33,7 +34,7 @@ export interface CaseDetailProps {
 }
 
 const Label = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
-  <div className={`text-[11px] font-medium text-ink-3 tracking-wide ${className}`}>{children}</div>
+  <ZoneLabel className={className}>{children}</ZoneLabel>
 );
 
 export default function CaseDetail(p: CaseDetailProps) {
@@ -84,16 +85,16 @@ export default function CaseDetail(p: CaseDetailProps) {
   );
 
   const draftSection = showDraft && (
-    <section>
-      <div className="flex items-center gap-2 mb-1.5">
-        <Label>返信の下書き</Label>
+    <section className={`rounded-lg border bg-card px-4 py-3 transition-colors ${dirty ? 'border-primary/60' : 'border-hairline'}`}>
+      <div className="flex items-center gap-2 mb-2">
+        <Label>下書き</Label>
         {c.decision?.answer && <Chip label={`決定: ${c.decision.answer}`} cls="bg-ok-soft text-ok border-ok/30" />}
         {c.draftEdited && !dirty && <Chip label="手直し済み" cls="bg-card-2 text-ink-3 border-hairline" />}
         {dirty && <Chip label="未保存" cls="bg-warn-soft text-warn border-warn/30" />}
       </div>
       {c.draft || dirty ? (
         <>
-          <AutoTextarea value={body} onChange={(v) => { setBody(v); setDirty(true); }} minRows={6} inputRef={(el) => { editorRef.current = el; }} />
+          <AutoTextarea value={body} onChange={(v) => { setBody(v); setDirty(true); }} minRows={6} inputRef={(el) => { editorRef.current = el; }} className={dirty ? 'border-primary/40' : ''} />
           <div className="flex items-center gap-1.5 mt-2 flex-wrap">
             <GhostButton onClick={() => p.onDraft(c, 'もう少し丁寧に')} disabled={busy}>丁寧に</GhostButton>
             <GhostButton onClick={() => p.onDraft(c, 'もっと短く')} disabled={busy}>短く</GhostButton>
@@ -120,8 +121,9 @@ export default function CaseDetail(p: CaseDetailProps) {
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto px-6 py-5">
         <div className="detail-prose space-y-4">
-          {/* 件名とメタ */}
+          {/* ゾーン 1: 案件(件名・メタ・予定) */}
           <header>
+            <Label className="mb-1.5">案件</Label>
             <h2 className="text-[20px] font-semibold text-ink leading-snug">{c.subject || '(件名なし)'}</h2>
             <div className="mt-1.5 text-[12px] leading-5 text-ink-2">
               <div className="flex items-center gap-x-2 flex-wrap">
@@ -144,24 +146,20 @@ export default function CaseDetail(p: CaseDetailProps) {
             </div>
           </header>
 
-          {/* 先生がすること(強調) */}
-          {c.ask && (
-            <section className="border-l-2 border-primary pl-3">
-              <Label className="mb-0.5">先生がすること</Label>
-              <p className="text-[14px] text-ink leading-relaxed">{c.ask}</p>
-            </section>
-          )}
-          {(c.summary || c.reason) && (
-            <section className="space-y-1">
+          {/* ゾーン 2: すること(藍の左罫線) */}
+          {(c.ask || c.summary || c.reason) && (
+            <section className="border-l-[3px] border-primary pl-3.5 py-0.5 space-y-1.5">
+              <Label>すること</Label>
+              {c.ask && <p className="text-[14px] text-ink leading-relaxed">{c.ask}</p>}
               {c.summary && <p className="text-[13px] text-ink-2 leading-relaxed whitespace-pre-wrap">{c.summary}</p>}
               {c.reason && <p className="text-[12px] text-ink-3">根拠: {c.reason}</p>}
             </section>
           )}
 
-          {/* 決める */}
+          {/* ゾーン 3: 決める(山吹の帯) */}
           {needsDecision && c.decision && (
             <section className="rounded-lg border border-warn/40 bg-warn-soft px-4 py-3">
-              <Label className="text-warn mb-0.5">決めてください</Label>
+              <Label className="!text-warn mb-1">決める</Label>
               <p className="text-[15px] font-semibold text-ink mb-2">{c.decision.question}</p>
               <div className="flex flex-wrap gap-1.5">
                 {c.decision.options.map((opt, i) => (
@@ -196,6 +194,7 @@ export default function CaseDetail(p: CaseDetailProps) {
 
       {/* 操作(常に見える) */}
       <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
+        <Label className="mr-1 hidden wide:block">操作</Label>
         {showDraft && (c.draft || dirty) && (
           <PrimaryButton size="lg" onClick={send} disabled={busy || !body.trim()} title={canSend ? '送信までの猶予の間は取り消せます' : 'eM Client の作成画面を開きます'}>
             {Icon.send}{sendLabel}
@@ -256,7 +255,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
   // 未準備: 1 行のバー
   if (!h) {
     return (
-      <section className="rounded-lg border border-hairline bg-card px-4 h-11 flex items-center gap-3">
+      <section className="rounded-lg border border-hairline bg-paper-2 px-4 h-11 flex items-center gap-3">
         <Label>作業に移る</Label>
         <span className="flex-1 min-w-0 text-[12.5px] text-ink-2 truncate">該当フォルダを探して作業指示書を用意します。ターミナルの Claude Code や FinderAI に渡せます。</span>
         <PrimaryButton size="sm" onClick={() => onPrepare(c)} disabled={busy} title="w">{busy ? <><Spinner /> 用意しています…</> : <>{Icon.terminal}作業指示書を作る</>}</PrimaryButton>
@@ -270,7 +269,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
   const canOpen = !!h.folder && h.folderExists;
 
   return (
-    <section className="rounded-lg border border-hairline bg-card p-4 space-y-3">
+    <section className="rounded-lg border border-hairline bg-paper-2 p-4 space-y-3">
       <div className="flex items-center gap-2">
         <Label>作業に移る</Label>
         <span className="text-[13.5px] font-semibold text-ink">{h.title}</span>
@@ -281,7 +280,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
       </div>
 
       {/* フォルダ */}
-      <div className="rounded-md border border-hairline bg-paper px-3 py-2">
+      <div className="rounded-md border border-hairline bg-card px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
           <span className="text-ink-3 flex-shrink-0">{Icon.folder}</span>
           {h.folder ? (
@@ -303,7 +302,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
       {/* 指示書 */}
       <div>
         <Label className="mb-1">作業指示書</Label>
-        <pre className="whitespace-pre-wrap font-sans text-[12.5px] text-ink leading-relaxed rounded-md border border-hairline bg-paper px-3 py-2.5 max-h-[420px] overflow-y-auto">{preview}{!showAll && truncated ? '\n…' : ''}</pre>
+        <pre className="whitespace-pre-wrap font-sans text-[12.5px] text-ink leading-relaxed rounded-md border border-hairline bg-card px-3 py-2.5 max-h-[420px] overflow-y-auto">{preview}{!showAll && truncated ? '\n…' : ''}</pre>
         <div className="flex items-center gap-2 mt-1.5">
           {truncated && <GhostButton onClick={() => setShowAll((v) => !v)}>{showAll ? '先頭だけ表示' : 'すべて表示'}</GhostButton>}
           <span className="text-[10.5px] text-ink-3 font-mono truncate" title={h.docPath}>{h.docPath}</span>

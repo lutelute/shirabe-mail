@@ -22,11 +22,20 @@ export function useToast(): { toast: string | null; flash: (m: string) => void }
   return { toast, flash };
 }
 
-export function SummaryChip({ label, n, tone, onClick }: { label: string; n: number; tone: 'danger' | 'primary' | 'ink'; onClick?: () => void }) {
+export type ChipTone = 'danger' | 'danger-outline' | 'primary' | 'warn' | 'ink';
+const CHIP_CLS: Record<ChipTone, string> = {
+  danger: 'bg-danger-soft text-danger border-danger/30',
+  'danger-outline': 'bg-card text-danger border-danger/50',
+  primary: 'bg-primary-soft text-primary border-primary/30',
+  warn: 'bg-warn-soft text-warn border-warn/30',
+  ink: 'bg-card text-ink border-hairline-2',
+};
+
+export function SummaryChip({ label, n, tone, onClick }: { label: string; n: number; tone: ChipTone; onClick?: () => void }) {
   if (n <= 0) return null;
-  const cls = tone === 'danger' ? 'bg-danger-soft text-danger border-danger/30' : tone === 'primary' ? 'bg-primary-soft text-primary border-primary/30' : 'bg-card-2 text-ink-2 border-hairline';
+  const cls = CHIP_CLS[tone];
   return (
-    <button onClick={onClick} className={`h-6 px-2 rounded-md border text-[11.5px] flex items-center gap-1 ${cls} ${onClick ? 'hover:opacity-80' : 'cursor-default'}`}>
+    <button onClick={onClick} className={`h-6 px-2.5 rounded-full border text-[11.5px] flex items-center gap-1.5 ${cls} ${onClick ? 'hover:opacity-80' : 'cursor-default'}`}>
       <span>{label}</span>
       <span className="tnum font-medium">{n}</span>
     </button>
@@ -55,12 +64,21 @@ export function Mark({ kind }: { kind: 'calendar' | 'missing' | 'deadline' | 'ta
   }
 }
 
-export function Card({ title, children, aside }: { title: string; children: React.ReactNode; aside?: React.ReactNode }) {
+export type CardTone = 'danger' | 'primary' | 'warn' | 'muted';
+const CARD_BAND: Record<CardTone, string> = {
+  danger: 'bg-danger-soft text-danger',
+  primary: 'bg-primary-soft text-primary',
+  warn: 'bg-warn-soft text-warn',
+  muted: 'bg-card-2 text-ink',
+};
+
+export function Card({ title, children, aside, tone = 'muted', lead }: { title: string; children: React.ReactNode; aside?: React.ReactNode; tone?: CardTone; lead?: React.ReactNode }) {
   return (
-    <section className="bg-card border border-hairline rounded-lg shadow-card">
-      <header className="flex items-center justify-between px-3.5 h-9 border-b border-hairline">
-        <h3 className="text-[12.5px] font-semibold text-ink">{title}</h3>
-        {aside}
+    <section className="bg-card border border-hairline rounded-lg shadow-card overflow-hidden">
+      <header className={`flex items-center gap-2 px-3.5 h-8 border-b border-hairline ${CARD_BAND[tone]}`}>
+        {lead}
+        <h3 className="text-[12px] font-bold tracking-wide">{title}</h3>
+        <span className="ml-auto">{aside}</span>
       </header>
       <div className="px-3.5 py-2.5">{children}</div>
     </section>

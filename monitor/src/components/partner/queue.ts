@@ -1,5 +1,5 @@
 import type { ButlerCase, OutboxItem, FollowUp, ButlerGroup, JournalEntry } from '../../types';
-import type { QueueGroups } from './partnerUi';
+import type { QueueGroups, SectionTone } from './partnerUi';
 
 // =====================================================================
 // 「今日」のキュー: 案件・送信予定・返事待ち・片付け・日誌を 1 本のリストに並べる
@@ -21,19 +21,20 @@ export interface QueueSection {
   hint: string;
   count: number;
   collapsible: boolean;
+  tone: SectionTone;
   items: QueueItem[];
 }
 
-export const SECTION_META: Record<Section, { label: string; hint: string; collapsible: boolean }> = {
-  decide: { label: '決める', hint: '答えると下書きができます', collapsible: false },
-  send: { label: '送る', hint: '下書きは先生の文体で', collapsible: false },
-  act: { label: 'やる', hint: '返信以外の作業', collapsible: false },
-  outbox: { label: '送信予定', hint: '猶予の間は取り消せます', collapsible: false },
-  followup: { label: '返事待ち', hint: '送ったきり返事が無いもの', collapsible: false },
-  fyi: { label: '参考', hint: '読むだけでよいもの', collapsible: true },
-  later: { label: '後で', hint: '', collapsible: true },
-  tidied: { label: '片付けた', hint: '一斉配信・迷惑メール', collapsible: true },
-  journal: { label: '日誌', hint: 'やったことの記録', collapsible: true },
+export const SECTION_META: Record<Section, { label: string; hint: string; collapsible: boolean; tone: SectionTone }> = {
+  decide: { label: '決める', hint: '答えると下書きができます', collapsible: false, tone: 'danger' },
+  send: { label: '送る', hint: '下書きは先生の文体で', collapsible: false, tone: 'primary' },
+  act: { label: 'やる', hint: '返信以外の作業', collapsible: false, tone: 'ink' },
+  outbox: { label: '送信予定', hint: '猶予の間は取り消せます', collapsible: false, tone: 'primary' },
+  followup: { label: '返事待ち', hint: '送ったきり返事が無いもの', collapsible: false, tone: 'warn' },
+  fyi: { label: '参考', hint: '読むだけでよいもの', collapsible: true, tone: 'muted' },
+  later: { label: '後で', hint: '', collapsible: true, tone: 'muted' },
+  tidied: { label: '片付けた', hint: '一斉配信・迷惑メール', collapsible: true, tone: 'muted' },
+  journal: { label: '日誌', hint: 'やったことの記録', collapsible: true, tone: 'muted' },
 };
 
 export const SECTION_ORDER: Section[] = ['decide', 'send', 'act', 'outbox', 'followup', 'fyi', 'later', 'tidied', 'journal'];
@@ -56,7 +57,7 @@ export function buildQueue(g: QueueGroups, open: Record<Section, boolean>): Queu
     const meta = SECTION_META[section];
     const items = all[section];
     const count = section === 'tidied' ? g.tidiedCount : items.length;
-    return { section, label: meta.label, hint: meta.hint, count, collapsible: meta.collapsible, items: meta.collapsible && !open[section] ? [] : items };
+    return { section, label: meta.label, hint: meta.hint, count, collapsible: meta.collapsible, tone: meta.tone, items: meta.collapsible && !open[section] ? [] : items };
   }).filter((s) => s.count > 0 || !s.collapsible);
 }
 

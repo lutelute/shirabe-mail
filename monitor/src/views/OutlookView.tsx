@@ -4,6 +4,7 @@ import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { buildOutlook, fmtDayHeading, fmtLaterDate, isActiveFollowUp } from '../components/outlook/outlookModel';
 import type { OutlookItem } from '../components/outlook/outlookModel';
 import { Card, Mark, OIcon, SummaryChip, useMediaQuery, useToast } from '../components/outlook/outlookUi';
+import Mascot from '../components/partner/Mascot';
 
 // =====================================================================
 // 見通し — 1〜2 週間先までを一画面で。いつ何の期限があり、どの予定が入っていて(未登録含む)、
@@ -168,7 +169,7 @@ export default function OutlookView({ onNavigate }: Props) {
 
   const aside = (
     <div className={`flex flex-col gap-3 ${wide ? 'w-[360px] flex-shrink-0' : ''}`}>
-      <Card title="返事待ち" aside={<span className="text-[11px] text-ink-3 tnum">{followUps.length}件</span>}>
+      <Card title="返事待ち" tone="warn" aside={<span className="text-[11px] opacity-80 tnum">{followUps.length}件</span>}>
         {followUps.length === 0 ? (
           <p className="text-[12.5px] text-ink-3">返事を待っているものはありません。</p>
         ) : (
@@ -185,7 +186,7 @@ export default function OutlookView({ onNavigate }: Props) {
           </ul>
         )}
       </Card>
-      <Card title="決めてほしいこと" aside={<span className="text-[11px] text-ink-3 tnum">{decisions.length}件</span>}>
+      <Card title="決めてほしいこと" tone="danger" aside={<span className="text-[11px] opacity-80 tnum">{decisions.length}件</span>}>
         {decisions.length === 0 ? (
           <p className="text-[12.5px] text-ink-3">今は決めることはありません。</p>
         ) : (
@@ -201,8 +202,10 @@ export default function OutlookView({ onNavigate }: Props) {
           </ul>
         )}
       </Card>
-      <Card title="相棒の動き">
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px]">
+      <Card title="相棒の動き" tone="muted">
+        <div className="flex items-start gap-3">
+        <Mascot mode={state?.running ? 'working' : 'idle'} stage={state?.progress?.stage} size={40} bubble={false} className="flex-shrink-0 mt-0.5" />
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[12.5px] flex-1 min-w-0">
           <dt className="text-ink-3">最終確認</dt><dd className="tnum text-ink">{fmtClock(state?.lastRunAt)}{state?.running ? '(確認中)' : ''}</dd>
           <dt className="text-ink-3">次回</dt><dd className="tnum text-ink">{fmtClock(state?.nextRunAt)}</dd>
           <dt className="text-ink-3">今日の動き</dt>
@@ -212,6 +215,7 @@ export default function OutlookView({ onNavigate }: Props) {
           <dt className="text-ink-3">前回の確認</dt>
           <dd className="text-ink">新着 <span className="tnum">{state?.digest?.stats?.candidates ?? 0}</span> 通 → 案件 <span className="tnum">{state?.digest?.stats?.cases ?? 0}</span> 件</dd>
         </dl>
+        </div>
       </Card>
     </div>
   );
@@ -219,7 +223,7 @@ export default function OutlookView({ onNavigate }: Props) {
   return (
     <div className="h-full flex flex-col overflow-hidden relative">
       {toast && <div className="absolute top-3 right-6 z-30 px-3 py-1.5 bg-ink text-paper text-[12px] rounded-md shadow-card">{toast}</div>}
-      <header className="flex items-center gap-3 px-6 pt-5 pb-3 flex-wrap">
+      <header className="flex items-center gap-3 px-6 pt-4 pb-4 flex-wrap bg-paper-2 border-b border-hairline flex-shrink-0">
         <h1 className="text-[22px] font-semibold text-ink leading-none">見通し</h1>
         <div className="flex items-center rounded-md border border-hairline overflow-hidden ml-1">
           {([7, 14] as const).map((r) => (
@@ -229,14 +233,14 @@ export default function OutlookView({ onNavigate }: Props) {
         <div className="ml-auto flex items-center gap-1.5 flex-wrap">
           <SummaryChip label="期限" n={data.counts.deadlines} tone="danger" onClick={() => { const d = firstDayWith((i) => i.kind === 'deadline'); if (d) jumpTo(d); }} />
           <SummaryChip label="予定" n={data.counts.events} tone="primary" onClick={() => { const d = firstDayWith((i) => i.kind === 'calendar' || i.kind === 'missing'); if (d) jumpTo(d); }} />
-          <SummaryChip label="未登録" n={data.counts.missing} tone="danger" onClick={() => { const d = firstDayWith((i) => i.kind === 'missing'); if (d) jumpTo(d); }} />
-          <SummaryChip label="返事待ち" n={data.counts.followUps} tone="ink" />
+          <SummaryChip label="未登録" n={data.counts.missing} tone="danger-outline" onClick={() => { const d = firstDayWith((i) => i.kind === 'missing'); if (d) jumpTo(d); }} />
+          <SummaryChip label="返事待ち" n={data.counts.followUps} tone="warn" />
           <SummaryChip label="送信予定" n={data.counts.sends} tone="primary" onClick={() => { const d = firstDayWith((i) => i.kind === 'send'); if (d) jumpTo(d); }} />
           <button onClick={() => void load()} title="更新" className="h-6 w-6 rounded-md text-ink-3 hover:text-ink hover:bg-card-2 flex items-center justify-center">{OIcon.refresh}</button>
         </div>
       </header>
 
-      <div className={`flex-1 overflow-hidden px-6 pb-5 ${wide ? 'flex gap-4' : 'overflow-y-auto'}`}>
+      <div className={`flex-1 overflow-hidden px-6 pt-5 pb-5 ${wide ? 'flex gap-4' : 'overflow-y-auto'}`}>
         <div ref={listRef} className={`${wide ? 'flex-1 overflow-y-auto pr-1' : ''}`}>
           {loading && !state ? (
             <p className="text-[13px] text-ink-3 py-6">読み込んでいます…</p>
@@ -245,18 +249,20 @@ export default function OutlookView({ onNavigate }: Props) {
           ) : (
             <div className="bg-card border border-hairline rounded-lg shadow-card divide-y divide-hairline">
               {data.days.map((d) => (
-                <div key={d.day} ref={(el) => { dayRefs.current[d.day] = el; }} className="px-4 py-2">
-                  <div className={`flex items-center h-7 -mx-1 px-1 rounded text-[12.5px] font-semibold ${d.isToday ? 'bg-primary-soft text-primary' : d.isWeekend ? 'text-ink-3' : 'text-ink'}`}>
+                <div key={d.day} ref={(el) => { dayRefs.current[d.day] = el; }}>
+                  <div className={`flex items-center h-8 px-4 text-[12px] font-bold tracking-wide ${d.isToday ? 'bg-primary-soft text-primary' : d.isWeekend ? 'bg-card-2 text-ink-3' : 'bg-card text-ink'}`}>
                     {fmtDayHeading(d.date, now)}
-                    {d.items.length > 0 && <span className="ml-2 text-[11px] font-normal text-ink-3 tnum">{d.items.length}</span>}
+                    {d.items.length > 0 && <span className={`ml-2 tnum text-[10.5px] min-w-[18px] px-1.5 h-[17px] inline-flex items-center justify-center rounded-full font-semibold ${d.isToday ? 'bg-primary text-primary-ink' : 'bg-card-2 text-ink-2'}`}>{d.items.length}</span>}
                   </div>
-                  {d.items.length === 0 ? <div className="h-6 text-[12px] text-hairline-2 pl-1">—</div> : <div className="pl-1">{d.items.map(renderItem)}</div>}
+                  <div className="px-5 py-1.5">
+                    {d.items.length === 0 ? <div className="h-6 text-[12px] text-hairline-2">—</div> : d.items.map(renderItem)}
+                  </div>
                 </div>
               ))}
               {data.later.length > 0 && (
-                <div ref={(el) => { dayRefs.current.later = el; }} className="px-4 py-2">
-                  <div className="flex items-center h-7 text-[12.5px] font-semibold text-ink-2">それ以降<span className="ml-2 text-[11px] font-normal text-ink-3 tnum">{data.later.length}</span></div>
-                  <div className="pl-1">
+                <div ref={(el) => { dayRefs.current.later = el; }}>
+                  <div className="flex items-center h-8 px-4 text-[12px] font-bold tracking-wide bg-card-2 text-ink-2">それ以降<span className="ml-2 tnum text-[10.5px] min-w-[18px] px-1.5 h-[17px] inline-flex items-center justify-center rounded-full font-semibold bg-card text-ink-2">{data.later.length}</span></div>
+                  <div className="px-5 py-1.5">
                     {data.later.map((it) => (
                       <div key={`later-${it.key}`} className="flex items-center gap-2.5">
                         <span className="w-16 text-[11.5px] text-ink-3 tnum flex-shrink-0">{fmtLaterDate(it)}</span>

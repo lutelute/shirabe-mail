@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import type { OutboxItem, FollowUp, ButlerGroup, JournalEntry } from '../../types';
-import { Chip, PrimaryButton, SubtleButton, GhostButton, Spinner, AutoTextarea, Icon, fmtRemaining, fmtDateTime, useNow, nameOf, addrOf } from './partnerUi';
+import { Chip, PrimaryButton, SubtleButton, GhostButton, Spinner, AutoTextarea, Icon, ZoneLabel, fmtRemaining, fmtDateTime, useNow, nameOf, addrOf } from './partnerUi';
 
 // =====================================================================
 // 送信予定 / 返事待ち / 片付け / 日誌 の詳細パネル
 // =====================================================================
 
-function Head({ chips, title, sub, right }: { chips?: React.ReactNode; title: string; sub?: string; right?: React.ReactNode }) {
+function Head({ chips, title, sub, right, zone = '案件' }: { chips?: React.ReactNode; title: string; sub?: string; right?: React.ReactNode; zone?: string }) {
   return (
     <header>
+      <ZoneLabel className="mb-1.5">{zone}</ZoneLabel>
       <h2 className="text-[20px] font-semibold text-ink leading-snug">{title}</h2>
       <div className="mt-1.5 text-[12px] leading-5 text-ink-2">
         {(sub || right) && (
@@ -24,7 +25,7 @@ function Head({ chips, title, sub, right }: { chips?: React.ReactNode; title: st
   );
 }
 
-const Label = ({ children }: { children: React.ReactNode }) => <div className="text-[11px] font-medium text-ink-3 tracking-wide mb-1">{children}</div>;
+const Label = ({ children }: { children: React.ReactNode }) => <ZoneLabel className="mb-1.5">{children}</ZoneLabel>;
 
 // ---- 送信予定 ----
 export function OutboxDetail({ o, busy, onSendNow, onCancel }: { o: OutboxItem; busy: boolean; onSendNow: (o: OutboxItem) => void; onCancel: (o: OutboxItem) => void }) {
@@ -43,6 +44,7 @@ export function OutboxDetail({ o, busy, onSendNow, onCancel }: { o: OutboxItem; 
           title={o.subject}
           sub={`宛先: ${o.to.join(', ')}${o.cc.length ? ` / Cc: ${o.cc.join(', ')}` : ''}`}
           right={o.status === 'scheduled' ? `${fmtDateTime(o.sendAt)} に送信` : ''}
+          zone="送信予定"
         />
         {o.status === 'scheduled' && (
           <div className="rounded-lg border border-primary/30 bg-primary-soft px-4 py-3 flex items-center gap-3">
@@ -53,13 +55,14 @@ export function OutboxDetail({ o, busy, onSendNow, onCancel }: { o: OutboxItem; 
         )}
         {o.status === 'sending' && <div className="text-[13px] text-ink-2 flex items-center gap-2"><Spinner /> 送信しています…</div>}
         {o.status === 'failed' && <div className="rounded-lg border border-danger/30 bg-danger-soft px-4 py-3 text-[13px] text-danger">送信に失敗しました: {o.error ?? '不明なエラー'}</div>}
-        <section>
+        <section className="rounded-lg border border-hairline bg-card px-4 py-3">
           <Label>本文(署名と引用は送信時に付きます)</Label>
-          <pre className="draft-text whitespace-pre-wrap font-sans text-ink bg-card border border-hairline rounded-md px-4 py-3">{o.body}</pre>
+          <pre className="draft-text whitespace-pre-wrap font-sans text-ink">{o.body}</pre>
         </section>
        </div>
       </div>
       <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
+        <ZoneLabel className="mr-1 hidden wide:block">操作</ZoneLabel>
         {o.status === 'scheduled' && <PrimaryButton size="lg" onClick={() => onSendNow(o)} disabled={busy}>{Icon.send}今すぐ送る</PrimaryButton>}
         {o.status === 'failed' && <PrimaryButton size="lg" onClick={() => onSendNow(o)} disabled={busy}>{Icon.refresh}もう一度</PrimaryButton>}
         {(o.status === 'scheduled' || o.status === 'failed') && <SubtleButton danger onClick={() => onCancel(o)} disabled={busy}>{o.status === 'failed' ? 'やめる' : '取り消し'}</SubtleButton>}
@@ -93,20 +96,16 @@ export function FollowUpDetail({ f, busy, canSend, onAction }: { f: FollowUp; bu
           </>}
           title={f.subject || '(件名なし)'}
           sub={`${f.to || f.toAddress} へ ${fmtDateTime(f.sentAt)} に送信`}
+          zone="返事待ち"
         />
-        {f.ask && (
-          <section className="border-l-2 border-primary pl-3">
-            <Label>先生が求めたこと</Label>
-            <p className="text-[14px] text-ink leading-relaxed">{f.ask}</p>
+        {(f.ask || f.summary) && (
+          <section className="border-l-[3px] border-primary pl-3.5 py-0.5 space-y-1.5">
+            <Label>すること</Label>
+            {f.ask && <p className="text-[14px] text-ink leading-relaxed">{f.ask}</p>}
+            {f.summary && <p className="text-[13px] text-ink-2 leading-relaxed">{f.summary}</p>}
           </section>
         )}
-        {f.summary && (
-          <section>
-            <Label>経緯</Label>
-            <p className="text-[13px] text-ink-2 leading-relaxed">{f.summary}</p>
-          </section>
-        )}
-        <section>
+        <section className={`rounded-lg border bg-card px-4 py-3 ${composing ? 'border-primary/60' : 'border-hairline'}`}>
           <div className="flex items-center gap-2 mb-1.5">
             <Label>催促文</Label>
             {!f.nudgeDraft && !composing && <span className="text-[11px] text-ink-3 -mt-1">「催促する」で相棒が用意します</span>}
@@ -127,6 +126,7 @@ export function FollowUpDetail({ f, busy, canSend, onAction }: { f: FollowUp; bu
        </div>
       </div>
       <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
+        <ZoneLabel className="mr-1 hidden wide:block">操作</ZoneLabel>
         {(f.nudgeDraft || composing) ? (
           <PrimaryButton size="lg" onClick={() => onAction(f, 'nudge', body)} disabled={busy || !body.trim()}>{Icon.send}{canSend ? 'この内容で催促する' : 'eM Client で催促する'}</PrimaryButton>
         ) : (
@@ -149,6 +149,7 @@ export function GroupDetail({ g, busy, onUndoTidy, onApprove, onRule }: { g: But
        <div className="detail-prose space-y-4">
         <Head
           chips={<Chip label={kindLabel} cls={g.kind === 'spam_delete' ? 'bg-danger-soft text-danger border-danger/30' : 'bg-card-2 text-ink-2 border-hairline'} />}
+          zone="片付け"
           title={g.label}
           sub={`${g.reason}${g.archiveFolder ? ` — 移動先: ${g.archiveFolder}` : ''}${g.error ? ` — ${g.error}` : ''}`}
           right={`${g.items.length}通`}
@@ -167,6 +168,7 @@ export function GroupDetail({ g, busy, onUndoTidy, onApprove, onRule }: { g: But
        </div>
       </div>
       <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
+        <ZoneLabel className="mr-1 hidden wide:block">操作</ZoneLabel>
         {g.kind === 'tidied' && !g.undone && <PrimaryButton size="lg" onClick={() => onUndoTidy(g)} disabled={busy}>{Icon.undo}受信箱へ戻す</PrimaryButton>}
         {g.kind === 'spam_delete' && (
           <>
@@ -184,6 +186,7 @@ export function GroupDetail({ g, busy, onUndoTidy, onApprove, onRule }: { g: But
 export function JournalDetail({ j }: { j: JournalEntry }) {
   return (
     <div className="px-6 py-5 space-y-3 detail-prose">
+      <ZoneLabel>日誌</ZoneLabel>
       <div className="text-[11px] text-ink-3 tnum">{new Date(j.at).toLocaleString('ja-JP')}</div>
       <p className={`text-[14px] leading-relaxed ${j.kind === 'error' ? 'text-danger' : 'text-ink'}`}>{j.text}</p>
       {(j.caseId || j.accountEmail) && <p className="text-[11.5px] text-ink-3">{j.accountEmail}{j.caseId ? ` · ${j.caseId}` : ''}</p>}

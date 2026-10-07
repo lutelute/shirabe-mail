@@ -32,6 +32,21 @@ export const TIER_META: Record<SenderTier, { label: string; cls: string }> = {
   noise: { label: '不要(学習)', cls: 'bg-card-2 text-ink-3 border-hairline' },
 };
 
+// セクションの色(見出し帯・行の左バー・要約チップで共通): 決める=朱 / 送る・送信予定=藍 / やる=墨 / 返事待ち=山吹 / その他=灰
+export type SectionTone = 'danger' | 'primary' | 'ink' | 'warn' | 'muted';
+export const SECTION_TONE_META: Record<SectionTone, { band: string; bar: string; chip: string; badge: string }> = {
+  danger: { band: 'sec-decide', bar: 'bg-danger', chip: 'bg-danger-soft text-danger border-danger/30 hover:border-danger/60', badge: 'bg-danger text-white' },
+  primary: { band: 'sec-send', bar: 'bg-primary', chip: 'bg-primary-soft text-primary border-primary/30 hover:border-primary/60', badge: 'bg-primary text-primary-ink' },
+  ink: { band: 'sec-act', bar: 'bg-ink-2', chip: 'bg-card text-ink border-hairline-2 hover:border-ink-3', badge: 'bg-ink text-paper' },
+  warn: { band: 'sec-followup', bar: 'bg-warn', chip: 'bg-warn-soft text-warn border-warn/30 hover:border-warn/60', badge: 'bg-warn text-white' },
+  muted: { band: 'sec-muted', bar: 'bg-hairline-2', chip: 'bg-card text-ink-2 border-hairline hover:border-hairline-2', badge: 'bg-card-2 text-ink-2' },
+};
+
+/** ゾーンの見出しラベル(11px・字間広め) */
+export function ZoneLabel({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <div className={`zone-label ${className}`}>{children}</div>;
+}
+
 export const MODE_LABEL: Record<PartnerMode, string> = {
   observe: '見るだけ',
   assist: '下書きまで',

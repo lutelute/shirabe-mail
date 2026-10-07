@@ -14,7 +14,8 @@ export default {
       },
       colors: {
         // 意味トークン
-        paper: 'var(--paper)',
+        paper: { DEFAULT: 'var(--paper)', 2: 'var(--paper-2)' },
+        claw: 'var(--claw)',
         card: { DEFAULT: 'var(--card)', 2: 'var(--card-2)' },
         ink: { DEFAULT: 'var(--ink)', 2: 'var(--ink-2)', 3: 'var(--ink-3)' },
         hairline: { DEFAULT: 'var(--hairline)', 2: 'var(--hairline-2)' },

@@ -1,8 +1,10 @@
 import type { NightlyDigest, PartnerMode } from '../../types';
-import { PrimaryButton, SubtleButton, Spinner, MODE_LABEL, STAGE_LABEL, fmtDateTime, fmtTime, Icon } from './partnerUi';
+import { PrimaryButton, SubtleButton, Spinner, MODE_LABEL, STAGE_LABEL, fmtDateTime, fmtTime, Icon, useMediaQuery } from './partnerUi';
+import Mascot from './Mascot';
+import type { MascotMode } from './Mascot';
 
 // =====================================================================
-// 相棒の一言 — 申し送り(左、最初の文だけ太字)と状態・操作(右)
+// 相棒ゾーン — 左にしらべ(キャラクター)、中央に申し送り(最初の文だけ太字)、右に状態・操作
 // =====================================================================
 
 interface Progress { stage: string; message: string; done?: number; total?: number }
@@ -12,6 +14,7 @@ interface Props {
   loaded: boolean;
   running: boolean;
   progress: Progress | null;
+  mascotMode: MascotMode;
   lastRunAt: string | null;
   nextRunAt: string | null;
   mode: PartnerMode;
@@ -27,7 +30,23 @@ function splitLead(text: string): [string, string] {
   return [text.slice(0, i + 1), text.slice(i + 1)];
 }
 
-export default function BriefCard({ digest, loaded, running, progress, lastRunAt, nextRunAt, mode, manual, onRunNow, onSettings }: Props) {
+/** 吹き出しに出す短い文 */
+function mascotMessage(mode: MascotMode, progress: Progress | null, digest: NightlyDigest | null, nextRunAt: string | null): string {
+  if (mode === 'working') {
+    if (!progress) return '確認しています…';
+    const label = STAGE_LABEL[progress.stage] ?? progress.stage;
+    return progress.total ? `${label}… ${progress.done ?? 0}/${progress.total}` : `${label}…`;
+  }
+  if (mode === 'done') return '済みました';
+  if (mode === 'error') return progress?.message || 'うまくいきませんでした';
+  const n = digest?.stats?.p1 ?? 0;
+  if (n > 0) return `今日動くのは ${n} 件`;
+  if (nextRunAt) return `次は ${fmtTime(nextRunAt)} に見ます`;
+  return '片付いています';
+}
+
+export default function BriefCard({ digest, loaded, running, progress, mascotMode, lastRunAt, nextRunAt, mode, manual, onRunNow, onSettings }: Props) {
+  const wide = useMediaQuery('(min-width: 1180px)');
   const text = !loaded
     ? '読み込んでいます…'
     : !digest
@@ -37,11 +56,29 @@ export default function BriefCard({ digest, loaded, running, progress, lastRunAt
   const [greet, after] = splitLead(text);
   const [lead, rest] = greet.length <= 12 && after ? splitLead(after) : [greet, after];
   const greeting = greet.length <= 12 && after ? greet : '';
+  const bubble = mascotMessage(mascotMode, progress, digest, nextRunAt);
+
+  const mascot = (size: number) => (
+    <Mascot mode={mascotMode} stage={progress?.stage} message={bubble} done={progress?.done} total={progress?.total} size={size} bubble={false} />
+  );
 
   return (
     <section className="rounded-xl border border-hairline bg-card shadow-card">
-      <div className="flex gap-6 px-6 py-4">
+      <div className={`flex ${wide ? 'gap-5 px-5 py-4' : 'gap-3 px-4 py-3'}`}>
+        {/* しらべ */}
+        {wide ? (
+          <div className="flex-shrink-0 w-[124px] flex flex-col items-center justify-center gap-1">
+            {mascot(120)}
+            <span className="text-[10.5px] text-ink-3 text-center leading-tight max-w-[124px] truncate" title={bubble}>{bubble}</span>
+          </div>
+        ) : null}
         <div className="flex-1 min-w-0">
+          {!wide && (
+            <div className="flex items-center gap-2 mb-1.5">
+              {mascot(40)}
+              <span className="text-[11px] text-ink-3 truncate">{bubble}</span>
+            </div>
+          )}
           <p className="brief-text text-ink whitespace-pre-wrap">
             {greeting && <span className="text-ink-2">{greeting}</span>}
             <span className="font-semibold">{lead}</span>
