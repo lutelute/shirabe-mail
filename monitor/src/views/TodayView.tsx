@@ -7,7 +7,7 @@ import CaseDetail from '../components/partner/CaseDetail';
 import { OutboxDetail, FollowUpDetail, GroupDetail, JournalDetail } from '../components/partner/OtherDetails';
 import { buildQueue, flattenQueue, SECTION_ORDER } from '../components/partner/queue';
 import type { QueueItem, Section } from '../components/partner/queue';
-import { groupQueue, useToast, useMediaQuery, todayLabel, fmtTime, Icon, HANDOFF_TARGET_LABEL, SECTION_TONE_META } from '../components/partner/partnerUi';
+import { groupQueue, useToast, useMediaQuery, todayLabel, fmtTime, Icon, HANDOFF_TARGET_LABEL, SECTION_TONE_META, PrimaryButton } from '../components/partner/partnerUi';
 import type { SectionTone } from '../components/partner/partnerUi';
 import type { MascotMode } from '../components/partner/Mascot';
 
@@ -148,7 +148,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
     const res = await window.electronAPI.partnerSend({ caseId: c.id, body });
     if (res.status === 'error') { flash(res.error ?? '送信の準備に失敗しました'); return; }
     if (res.fallback === 'compose') {
-      flash('eM Client の作成画面を開きました。内容を確認して送ってください');
+      flash('接続が未設定のため eM Client の作成画面を開きました。「接続する」を済ませると相棒が直接送れます');
     } else if (res.outboxId) {
       const delay = settings.partnerSendDelayMinutes ?? 0;
       flash(delay > 0 ? `${delay}分後に送信します(取り消せます)` : '送信します');
@@ -173,7 +173,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
     const res = await window.electronAPI.partnerDraftToEmClient({ caseId: c.id, body });
     if (res.status === 'error') { flash(res.error ?? 'eM Client の下書きに入れられませんでした'); return; }
     if (body) patchCase(c.id, { draft: body, draftEdited: true });
-    flash(res.fallback === 'compose' ? 'eM Client の作成画面を開きました' : 'eM Client の下書きに入れました(開いて送ってください)');
+    flash(res.fallback === 'compose' ? '接続が未設定のため eM Client の作成画面を開きました。「接続する」を済ませると下書きフォルダに直接入ります' : 'eM Client の下書きに入れました(開いて送ってください)');
     await refresh();
   }), [withBusy, flash, patchCase, refresh]);
 
@@ -344,6 +344,8 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
     }, 60);
   }, [state?.digest, sectionOf]);
   const canSendFor = (email: string) => !!state?.canSend?.[email];
+  // IMAP か SMTP のどちらかが未設定のアカウント(= 下書き投入・送信が eM Client 直結になっていない)
+  const unconnected = useMemo(() => (settings.selectedAccounts ?? []).filter((e) => !(state?.canSend?.[e] && state?.canTidy?.[e])), [settings.selectedAccounts, state?.canSend, state?.canTidy]);
   const sendDelay = settings.partnerSendDelayMinutes ?? 0;
 
   const toggleSection = (s: Section) => setOpenSections((prev) => ({ ...prev, [s]: !prev[s] }));
@@ -501,6 +503,17 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           lastRunAt={state?.lastRunAt ?? null} nextRunAt={state?.nextRunAt ?? null}
           mode={mode} manual={!settings.partnerIntervalMinutes} onRunNow={runNow} onSettings={() => onNavigate('settings')}
         />
+        {unconnected.length > 0 && (
+          <div className="mt-3 rounded-lg border border-warn/40 bg-warn-soft px-4 py-2.5 flex items-center gap-3 text-[12.5px] text-ink">
+            <span className="text-warn flex-shrink-0">{Icon.draft}</span>
+            <span className="flex-1 min-w-0">
+              <span className="font-semibold">eM Client とまだ接続していません</span>
+              <span className="text-ink-2">（{unconnected.length === (settings.selectedAccounts?.length ?? 0) ? '全アカウント' : unconnected.map((e) => e.split('@')[0]).join('・')}）。
+              接続すると、下書きは eM Client の「下書き」に直接入り、送信は eM Client を開かずに相棒が行います。今は代わりに eM Client の作成画面を開いています。</span>
+            </span>
+            <PrimaryButton size="sm" onClick={() => onNavigate('settings')}>接続する</PrimaryButton>
+          </div>
+        )}
       </div>
 
       {/* ゾーン B(キュー)/ C(詳細): A との間 20px、B と C の間 16px */}

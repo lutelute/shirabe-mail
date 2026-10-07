@@ -2717,6 +2717,15 @@ JSON以外の説明は不要です。`;
       parts.push(`cc=${encodeURIComponent(params.cc)}`);
     }
     const mailto = `mailto:${encodeURIComponent(params.to)}?${parts.join('&')}`;
+    // macOS の既定メールアプリが eM Client 以外のことがあるので、eM Client を名指しで開く
+    if (fs.existsSync('/Applications/eM Client.app')) {
+      try {
+        execFileSync('open', ['-a', 'eM Client', mailto], { timeout: 8000 });
+        return;
+      } catch (err) {
+        console.warn('[openMailCompose] eM Client で開けず既定アプリへ:', (err as Error).message);
+      }
+    }
     await safeOpenExternal(mailto);
   }
 
