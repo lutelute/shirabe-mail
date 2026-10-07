@@ -5,6 +5,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { fileURLToPath } from 'url';
 import { spawn, execSync, execFileSync } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 import Database from 'better-sqlite3';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -1278,9 +1279,12 @@ Markdown形式で以下のセクションを含める。メールごとに判定
       let stderr = '';
       let streamResult = '';
       let stdoutBuffer = '';
+      // チャンク境界で割れた多バイト文字が「�」にならないよう StringDecoder で繋ぐ
+      const outDecoder = new StringDecoder('utf8');
+      const errDecoder = new StringDecoder('utf8');
 
       proc.stdout.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
+        const text = outDecoder.write(chunk);
         stdout += text;
 
         if (options.streamJson && options.onProgress) {
@@ -1298,11 +1302,13 @@ Markdown形式で以下のセクションを含める。メールごとに判定
       });
 
       proc.stderr.on('data', (chunk: Buffer) => {
-        stderr += chunk.toString();
+        stderr += errDecoder.write(chunk);
       });
 
       proc.on('close', (code) => {
         clearTimeout(timer);
+        stdout += outDecoder.end();
+        stderr += errDecoder.end();
         // For stream-json mode, prefer the extracted result
         const text = options.streamJson && streamResult
           ? streamResult

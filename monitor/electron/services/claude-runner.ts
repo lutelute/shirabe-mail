@@ -172,8 +172,11 @@ export function createClaudeRunner(cfg: ClaudeRunnerConfig): ClaudeRunner {
       const timeoutMs = call.timeoutMs ?? 120_000;
 
       const outcome = await new Promise<{ stdout: string; stderr: string; code: number | null; timedOut: boolean }>((resolve) => {
-        let stdout = '';
-        let stderr = '';
+        // チャンク境界で UTF-8 の多バイト文字が割れると「�」になるので、Buffer のまま集めて最後に一度だけ decode する
+        const outChunks: Buffer[] = [];
+        const errChunks: Buffer[] = [];
+        const stdoutText = () => Buffer.concat(outChunks).toString('utf8');
+        const stderrText = () => Buffer.concat(errChunks).toString('utf8');
         let timedOut = false;
         let proc: ReturnType<typeof spawn>;
         try {
@@ -188,15 +191,15 @@ export function createClaudeRunner(cfg: ClaudeRunnerConfig): ClaudeRunner {
           setTimeout(() => { if (!proc.killed) proc.kill('SIGKILL'); }, 3000);
         }, timeoutMs);
 
-        proc.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
-        proc.stderr?.on('data', (c: Buffer) => { stderr += c.toString(); });
+        proc.stdout?.on('data', (c: Buffer) => { outChunks.push(c); });
+        proc.stderr?.on('data', (c: Buffer) => { errChunks.push(c); });
         proc.on('error', (err) => {
           clearTimeout(timer);
-          resolve({ stdout, stderr: `${stderr}\n${err.message}`, code: 1, timedOut });
+          resolve({ stdout: stdoutText(), stderr: `${stderrText()}\n${err.message}`, code: 1, timedOut });
         });
         proc.on('close', (code) => {
           clearTimeout(timer);
-          resolve({ stdout, stderr, code, timedOut });
+          resolve({ stdout: stdoutText(), stderr: stderrText(), code, timedOut });
         });
         // プロンプトは stdin から(引数長の制限を避ける)
         proc.stdin?.on('error', () => undefined);
