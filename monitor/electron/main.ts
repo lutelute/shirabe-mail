@@ -57,6 +57,7 @@ import type {
   ButlerApproval,
 } from '../src/types/index';
 import { DEFAULT_SETTINGS } from '../src/types/index';
+import type { PtySession } from '../src/types/index';
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -355,7 +356,7 @@ function loadSettings(): AppSettings {
 
   // v3.1.5: 相棒の既定モデルを Opus(5.5)・effort xhigh に。初めて effort 欄を見る設定ファイルだけ 1 回移行する
   // (DEFAULT_SETTINGS を被せた後では常に値があるので、ファイルの生の内容で判定する)
-  if (parsed.butlerEffort === undefined) {
+  if (parsed.butlerEffort == null) {   // 欠落(undefined)も null も移行対象
     raw.butlerModel = 'opus';
     raw.butlerDraftModel = 'opus';
     raw.butlerEffort = 'xhigh';
@@ -1666,64 +1667,69 @@ Markdown形式で以下のセクションを含める。メールごとに判定
     spawn('osascript', ['-e', `tell application "Terminal" to do script "cd '${cwd}' && unset CLAUDECODE && claude"`]);
   });
 
-  // --- PTY (Chat: xterm.js + node-pty) ---
+  // --- PTY(アプリ内ターミナル: xterm.js + node-pty、複数セッション) ---
+  //   ・ログインシェル、または指定コマンド(例: claude "<指示>")を指定フォルダで起動
+  //   ・renderer には pty:data {id,data} / pty:exit {id,code} で流す
+  type PtyProc = ReturnType<typeof import('node-pty').spawn>;
+  interface PtyEntry { proc: PtyProc | null; info: PtySession }
+  const ptys = new Map<string, PtyEntry>();
+  const MAX_PTYS = 12;
 
-  let ptyProcess: ReturnType<typeof import('node-pty').spawn> | null = null;
+  const sendPty = (channel: string, payload: unknown) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  };
 
-  ipcMain.handle('pty:create', async () => {
-    // Dynamic import for node-pty (native module)
+  ipcMain.handle('pty:create', async (_event, params?: { id?: string; title?: string; cwd?: string; command?: string[]; cols?: number; rows?: number; caseId?: string }): Promise<PtySession> => {
     const pty = await import('node-pty');
     const shell = process.env.SHELL || '/bin/zsh';
-
-    if (ptyProcess) {
-      ptyProcess.kill();
-      ptyProcess = null;
+    const id = params?.id || `pty-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const existing = ptys.get(id);
+    if (existing?.proc) return existing.info;
+    if (ptys.size >= MAX_PTYS) {
+      // 終了済みから順に片付ける
+      for (const [k, v] of ptys) { if (!v.proc) { ptys.delete(k); if (ptys.size < MAX_PTYS) break; } }
     }
-
-    ptyProcess = pty.spawn(shell, [], {
-      name: 'xterm-256color',
-      cols: 120,
-      rows: 30,
-      cwd: process.cwd(),
-      env: cleanEnvForClaude(),
+    let cwd = params?.cwd && fs.existsSync(params.cwd) ? params.cwd : os.homedir();
+    try { if (!fs.statSync(cwd).isDirectory()) cwd = os.homedir(); } catch { cwd = os.homedir(); }
+    const env = cleanEnvForClaude();
+    env.PATH = `${path.dirname(CLAUDE_CLI_PATH)}:${env.PATH ?? ''}`;
+    const cmd = params?.command && params.command.length > 0 ? params.command : null;
+    // コマンド指定時もログインシェル経由(-lc)で起動して PATH/補完/終了後にシェルへ戻れるようにする
+    const args = cmd ? ['-lc', `${cmd.map((a) => `'${a.replace(/'/g, `'\\''`)}'`).join(' ')}; exec ${shell}`] : ['-l'];
+    const proc = pty.spawn(shell, args, { name: 'xterm-256color', cols: params?.cols ?? 120, rows: params?.rows ?? 30, cwd, env });
+    const info: PtySession = {
+      id,
+      title: params?.title || (cmd ? cmd[0] : path.basename(cwd) || 'シェル'),
+      cwd,
+      command: cmd ?? undefined,
+      createdAt: new Date().toISOString(),
+      alive: true,
+      caseId: params?.caseId,
+    };
+    const entry: PtyEntry = { proc, info };
+    ptys.set(id, entry);
+    proc.onData((data: string) => sendPty('pty:data', { id, data }));
+    proc.onExit(({ exitCode }) => {
+      entry.proc = null;
+      entry.info.alive = false;
+      entry.info.exitCode = exitCode;
+      sendPty('pty:exit', { id, code: exitCode });
     });
-
-    ptyProcess.onData((data: string) => {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('pty:data', data);
-      }
-    });
-
-    ptyProcess.onExit(() => {
-      ptyProcess = null;
-    });
-
-    // Auto-start claude CLI
-    setTimeout(() => {
-      if (ptyProcess) {
-        ptyProcess.write('claude\r');
-      }
-    }, 500);
+    return info;
   });
 
-  ipcMain.handle('pty:write', async (_event, data: string) => {
-    if (ptyProcess) {
-      ptyProcess.write(data);
-    }
+  ipcMain.handle('pty:write', async (_event, id: string, data: string) => { ptys.get(id)?.proc?.write(data); });
+  ipcMain.handle('pty:resize', async (_event, id: string, cols: number, rows: number) => {
+    const p = ptys.get(id)?.proc;
+    if (p && cols > 0 && rows > 0) { try { p.resize(cols, rows); } catch { /* closed */ } }
   });
-
-  ipcMain.handle('pty:resize', async (_event, cols: number, rows: number) => {
-    if (ptyProcess) {
-      ptyProcess.resize(cols, rows);
-    }
+  ipcMain.handle('pty:destroy', async (_event, id: string) => {
+    const e = ptys.get(id);
+    if (e?.proc) { try { e.proc.kill(); } catch { /* already dead */ } }
+    ptys.delete(id);
   });
-
-  ipcMain.handle('pty:destroy', async () => {
-    if (ptyProcess) {
-      ptyProcess.kill();
-      ptyProcess = null;
-    }
-  });
+  ipcMain.handle('pty:list', async (): Promise<PtySession[]> => [...ptys.values()].map((e) => e.info));
+  app.on('before-quit', () => { for (const e of ptys.values()) { try { e.proc?.kill(); } catch { /* ignore */ } } });
 
   // --- Junk detection ---
 

@@ -3,7 +3,7 @@ import type { ViewType } from '../../types';
 import { groupQueue } from '../partner/partnerUi';
 
 // =====================================================================
-// アイコンレール(56px): 今日 / メール / カレンダー / 検索 / 見通し / ツール / 設定 / Claude Code
+// アイコンレール(56px): 今日 / メール / カレンダー / 検索 / 見通し / ターミナル / ツール / 設定 / Claude Code
 // =====================================================================
 
 interface SidebarProps {
@@ -45,6 +45,7 @@ const MAIN: NavItem[] = [
   { view: 'calendar', label: 'カレンダー', icon: I.calendar },
   { view: 'search', label: '検索', icon: I.search },
   { view: 'shirabe', label: '見通し  ⌘2', icon: I.outlook },
+  { view: 'terminal', label: 'ターミナル  ⌘3', icon: I.chat },
 ];
 const TOOLS: NavItem[] = [
   { view: 'task', label: 'タスク', icon: I.task },
@@ -54,7 +55,6 @@ const TOOLS: NavItem[] = [
   { view: 'audit', label: '監査', icon: I.audit },
   { view: 'proposal', label: '提案', icon: I.proposal },
   { view: 'junk', label: 'ゴミメール', icon: I.junk },
-  { view: 'chat', label: 'Chat', icon: I.chat },
 ];
 
 function RailButton({ active, label, icon, onClick, badge, working }: { active: boolean; label: string; icon: JSX.Element; onClick: () => void; badge?: number; working?: boolean }) {

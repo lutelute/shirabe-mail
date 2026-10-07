@@ -188,9 +188,18 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   const onHandoffOpen = useCallback((c: ButlerCase, target: HandoffTarget) => withBusy(`handoff:${c.id}`, async () => {
     const res = await window.electronAPI.partnerHandoffOpen({ caseId: c.id, target });
     if (res.status === 'error') { flash(res.error ?? '開けませんでした'); return; }
+    if (target === 'app') {
+      try {
+        localStorage.setItem('shirabe_pending_pty', JSON.stringify({ cwd: res.cwd, command: ['claude', res.prompt ?? ''], title: res.title || c.handoff?.title || c.subject.slice(0, 20), caseId: c.id }));
+      } catch { /* ignore */ }
+      flash('アプリ内ターミナルで Claude Code を起動しました');
+      await refresh();
+      onNavigate('terminal');
+      return;
+    }
     flash(res.detail ?? `${HANDOFF_TARGET_LABEL[target]} で開きました`);
     await refresh();
-  }), [withBusy, flash, refresh]);
+  }), [withBusy, flash, refresh, onNavigate]);
 
   const onPickFolder = useCallback((c: ButlerCase) => withBusy(`handoff:${c.id}`, async () => {
     const res = await window.electronAPI.partnerPickFolder({ caseId: c.id });
@@ -501,7 +510,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
         <BriefCard
           digest={digest} loaded={loaded} running={running} progress={progress} mascotMode={mascotMode}
           lastRunAt={state?.lastRunAt ?? null} nextRunAt={state?.nextRunAt ?? null}
-          mode={mode} manual={!settings.partnerIntervalMinutes} onRunNow={runNow} onSettings={() => onNavigate('settings')}
+          mode={mode} manual={!settings.partnerIntervalMinutes} onRunNow={runNow} onSettings={() => onNavigate('settings')} onNotice={flash}
         />
         {unconnected.length > 0 && (
           <div className="mt-3 rounded-lg border border-warn/40 bg-warn-soft px-4 py-2.5 flex items-center gap-3 text-[12.5px] text-ink">

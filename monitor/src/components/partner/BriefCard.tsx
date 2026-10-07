@@ -1,6 +1,7 @@
 import type { NightlyDigest, PartnerMode } from '../../types';
 import { PrimaryButton, SubtleButton, Spinner, MODE_LABEL, STAGE_LABEL, fmtDateTime, fmtTime, Icon, useMediaQuery } from './partnerUi';
 import Mascot from './Mascot';
+import ModelPicker from './ModelPicker';
 import type { MascotMode } from './Mascot';
 
 // =====================================================================
@@ -21,6 +22,7 @@ interface Props {
   manual: boolean;
   onRunNow: () => void;
   onSettings: () => void;
+  onNotice?: (msg: string) => void;   // トースト
 }
 
 /** 最初の文(「。」まで)と残りに分ける */
@@ -45,7 +47,7 @@ function mascotMessage(mode: MascotMode, progress: Progress | null, digest: Nigh
   return '片付いています';
 }
 
-export default function BriefCard({ digest, loaded, running, progress, mascotMode, lastRunAt, nextRunAt, mode, manual, onRunNow, onSettings }: Props) {
+export default function BriefCard({ digest, loaded, running, progress, mascotMode, lastRunAt, nextRunAt, mode, manual, onRunNow, onSettings, onNotice }: Props) {
   const wide = useMediaQuery('(min-width: 1180px)');
   const text = !loaded
     ? '読み込んでいます…'
@@ -113,9 +115,12 @@ export default function BriefCard({ digest, loaded, running, progress, mascotMod
             <div>最終確認 <span className="text-ink-2">{fmtDateTime(lastRunAt) || '—'}</span></div>
             <div>次回 <span className="text-ink-2">{nextRunAt ? fmtTime(nextRunAt) : manual ? '手動' : '—'}</span></div>
           </div>
-          <div className="flex items-center gap-1.5">
-            <PrimaryButton onClick={onRunNow} disabled={running}>{running ? <><Spinner /> 確認中</> : <>{Icon.refresh}今すぐ確認</>}</PrimaryButton>
-            <SubtleButton onClick={onSettings} title="設定 → 相棒">{MODE_LABEL[mode]}</SubtleButton>
+          <div className="flex flex-col items-end gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <PrimaryButton onClick={onRunNow} disabled={running}>{running ? <><Spinner /> 確認中</> : <>{Icon.refresh}今すぐ確認</>}</PrimaryButton>
+              <SubtleButton onClick={onSettings} title="設定 → 相棒">{MODE_LABEL[mode]}</SubtleButton>
+            </div>
+            <ModelPicker onSaved={(s) => onNotice?.(`次回の確認から ${s} で判定します`)} />
           </div>
         </div>
       </div>

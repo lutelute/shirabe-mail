@@ -8,7 +8,8 @@ import AccountSelector from '../components/AccountSelector';
 import MailTable from '../components/MailTable';
 import ThreadDetailPane from '../components/ThreadDetailPane';
 import TodoProposalPanel from '../components/TodoProposalPanel';
-import ChatPanel from '../components/ChatPanel';
+import TerminalView from './TerminalView';
+import { writeToActive } from '../components/terminal/terminalStore';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
 import EmptyState from '../components/shared/EmptyState';
 
@@ -466,7 +467,7 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
   }, []);
 
   const handleSendToCli = useCallback((message: string) => {
-    window.electronAPI.ptyWrite(message + '\n');
+    void writeToActive(message + '\n');
   }, []);
 
   const unreadCount = useMemo(() => {
@@ -790,9 +791,9 @@ ${userMessage ? `## ユーザーからの追加指示\n${userMessage}` : ''}
               className="h-1 flex-shrink-0 cursor-row-resize bg-surface-700/30 hover:bg-accent-500/30 transition-colors"
               onMouseDown={col3RowDown}
             />
-            {/* Bottom: ChatPanel (lazy-start terminal) */}
+            {/* Bottom: アプリ内ターミナル(タブ式。ターミナルビューと同じセッション) */}
             <div className="flex flex-col flex-1 overflow-hidden" style={{ minHeight: 0 }}>
-              <ChatPanel />
+              <TerminalView />
             </div>
           </div>
         </>

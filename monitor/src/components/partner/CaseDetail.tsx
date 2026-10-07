@@ -55,7 +55,7 @@ export default function CaseDetail(p: CaseDetailProps) {
   // 'w': 指示書が無ければ作る、あってフォルダが決まっていればターミナルで開く
   useEffect(() => {
     if (!p.handoffRequest || handoffBusy) return;
-    if (c.handoff?.folder) p.onHandoffOpen(c, 'terminal');
+    if (c.handoff?.folder) p.onHandoffOpen(c, 'app');
     else p.onHandoffPrepare(c);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.handoffRequest]);
@@ -321,7 +321,8 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick, onCopy }: {
 
       {/* 開く */}
       <div className="flex items-center gap-1.5 flex-wrap">
-        <PrimaryButton onClick={() => onOpen(c, 'terminal')} disabled={busy || !canOpen} title={canOpen ? 'Terminal.app でこのフォルダに Claude Code を起動し、指示書を渡します(w)' : 'フォルダを選んでください'}>{Icon.terminal}ターミナルで Claude Code</PrimaryButton>
+        <PrimaryButton onClick={() => onOpen(c, 'app')} disabled={busy || !canOpen} title={canOpen ? 'アプリ内のターミナルでこのフォルダに Claude Code を起動し、指示書を渡します(w)' : 'フォルダを選んでください'}>{Icon.terminal}アプリ内で Claude Code</PrimaryButton>
+        <SubtleButton onClick={() => onOpen(c, 'terminal')} disabled={busy || !canOpen} title={canOpen ? 'Terminal.app でこのフォルダに Claude Code を起動し、指示書を渡します' : 'フォルダを選んでください'}>ターミナルで Claude Code</SubtleButton>
         <SubtleButton onClick={() => onOpen(c, 'finderai')} disabled={busy || !canOpen} title={canOpen ? 'FinderAI でこのフォルダを開き、Claude セッションへ指示を送ります' : 'フォルダを選んでください'}>FinderAI で開く</SubtleButton>
         <GhostButton onClick={() => onOpen(c, 'folder')} disabled={busy || !canOpen} title="Finder で表示">{Icon.folder}フォルダを表示</GhostButton>
         <SubtleButton onClick={() => onCopy(c)} disabled={busy} title="指示書ごとクリップボードへ。場所を移してから開いた Claude や ChatGPT に貼り付けられます">指示をコピー</SubtleButton>

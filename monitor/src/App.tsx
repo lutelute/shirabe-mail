@@ -13,7 +13,7 @@ import TodoView from './views/TodoView';
 import ProjectView from './views/ProjectView';
 import AuditView from './views/AuditView';
 import ProposalView from './views/ProposalView';
-import ChatView from './views/ChatView';
+import TerminalView from './views/TerminalView';
 import JunkView from './views/JunkView';
 import SettingsView from './views/SettingsView';
 import OutlookView from './views/OutlookView';
@@ -36,12 +36,13 @@ export default function App() {
     if (settings.theme === 'paper') body.classList.add('theme-paper');
   }, [settings.theme]);
 
-  // ⌘, で設定、⌘1 で今日、⌘2 で見通し
+  // ⌘, で設定、⌘1 で今日、⌘2 で見通し、⌘3 でターミナル
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); setActiveView('settings'); }
       if ((e.metaKey || e.ctrlKey) && e.key === '1') { e.preventDefault(); setActiveView('today'); }
       if ((e.metaKey || e.ctrlKey) && e.key === '2') { e.preventDefault(); setActiveView('shirabe'); }
+      if ((e.metaKey || e.ctrlKey) && e.key === '3') { e.preventDefault(); setActiveView('terminal'); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -60,7 +61,8 @@ export default function App() {
       case 'project': return <ProjectView />;
       case 'audit': return <AuditView />;
       case 'proposal': return <ProposalView />;
-      case 'chat': return <ChatView />;
+      case 'terminal':
+      case 'chat': return <TerminalView />;
       case 'junk': return <JunkView />;
       case 'settings': return <SettingsView />;
       default: return null;

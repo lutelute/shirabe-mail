@@ -89,18 +89,25 @@ const api = {
   openClaudeCode: () =>
     ipcRenderer.invoke('openClaudeCode'),
   // PTY (Chat)
-  ptyCreate: () =>
-    ipcRenderer.invoke('pty:create'),
-  ptyWrite: (data) =>
-    ipcRenderer.invoke('pty:write', data),
-  ptyResize: (cols, rows) =>
-    ipcRenderer.invoke('pty:resize', cols, rows),
-  ptyDestroy: () =>
-    ipcRenderer.invoke('pty:destroy'),
+  ptyCreate: (params) =>
+    ipcRenderer.invoke('pty:create', params),
+  ptyWrite: (id, data) =>
+    ipcRenderer.invoke('pty:write', id, data),
+  ptyResize: (id, cols, rows) =>
+    ipcRenderer.invoke('pty:resize', id, cols, rows),
+  ptyDestroy: (id) =>
+    ipcRenderer.invoke('pty:destroy', id),
+  ptyList: () =>
+    ipcRenderer.invoke('pty:list'),
   onPtyData: (callback) => {
-    const handler = (_event, data) => callback(data);
+    const handler = (_event, payload) => callback(payload.id, payload.data);
     ipcRenderer.on('pty:data', handler);
     return () => ipcRenderer.removeListener('pty:data', handler);
+  },
+  onPtyExit: (callback) => {
+    const handler = (_event, payload) => callback(payload.id, payload.code);
+    ipcRenderer.on('pty:exit', handler);
+    return () => ipcRenderer.removeListener('pty:exit', handler);
   },
   // Junk detection
   detectJunkEmails: (mails, apiKey) =>

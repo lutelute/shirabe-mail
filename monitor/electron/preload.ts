@@ -89,19 +89,26 @@ const api = {
   // Claude Code launcher
   openClaudeCode: () =>
     ipcRenderer.invoke('openClaudeCode'),
-  // PTY (Chat)
-  ptyCreate: () =>
-    ipcRenderer.invoke('pty:create'),
-  ptyWrite: (data: string) =>
-    ipcRenderer.invoke('pty:write', data),
-  ptyResize: (cols: number, rows: number) =>
-    ipcRenderer.invoke('pty:resize', cols, rows),
-  ptyDestroy: () =>
-    ipcRenderer.invoke('pty:destroy'),
-  onPtyData: (callback: (data: string) => void) => {
-    const handler = (_event: any, data: string) => callback(data);
+  // PTY(アプリ内ターミナル、複数セッション)
+  ptyCreate: (params?: any) =>
+    ipcRenderer.invoke('pty:create', params),
+  ptyWrite: (id: string, data: string) =>
+    ipcRenderer.invoke('pty:write', id, data),
+  ptyResize: (id: string, cols: number, rows: number) =>
+    ipcRenderer.invoke('pty:resize', id, cols, rows),
+  ptyDestroy: (id: string) =>
+    ipcRenderer.invoke('pty:destroy', id),
+  ptyList: () =>
+    ipcRenderer.invoke('pty:list'),
+  onPtyData: (callback: (id: string, data: string) => void) => {
+    const handler = (_event: any, payload: { id: string; data: string }) => callback(payload.id, payload.data);
     ipcRenderer.on('pty:data', handler);
     return () => ipcRenderer.removeListener('pty:data', handler);
+  },
+  onPtyExit: (callback: (id: string, code: number) => void) => {
+    const handler = (_event: any, payload: { id: string; code: number }) => callback(payload.id, payload.code);
+    ipcRenderer.on('pty:exit', handler);
+    return () => ipcRenderer.removeListener('pty:exit', handler);
   },
   // Junk detection
   detectJunkEmails: (mails: any[], apiKey: string) =>

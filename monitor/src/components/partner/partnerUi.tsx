@@ -298,6 +298,7 @@ export function AutoTextarea({ value, onChange, placeholder, className = '', min
 
 /** 線画アイコン(1.5px) */
 export const Icon = {
+  plus: <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} d="M12 5v14M5 12h14" /></svg>,
   send: (
     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4.5 12h15m0 0l-6-6m6 6l-6 6" /></svg>
   ),
@@ -365,4 +366,4 @@ export function fmtEvent(ev: CaseEvent): string {
   return out;
 }
 
-export const HANDOFF_TARGET_LABEL: Record<HandoffTarget, string> = { terminal: 'ターミナル', finderai: 'FinderAI', folder: 'Finder' };
+export const HANDOFF_TARGET_LABEL: Record<HandoffTarget, string> = { app: 'アプリ内ターミナル', terminal: 'ターミナル', finderai: 'FinderAI', folder: 'Finder' };

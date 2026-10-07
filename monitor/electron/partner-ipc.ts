@@ -821,8 +821,13 @@ export function createPartner(host: PartnerHost): Partner {
       const folder = h.folder && fs.existsSync(h.folder) ? h.folder : null;
       const prompt = `作業指示書 ${h.docPath} を読んで、このフォルダで作業を進めてください。終わったら成果物の場所と、相手への返信文案を短く報告してください。`;
       let detail = '';
+      let extra: { cwd?: string; prompt?: string; title?: string } = {};
       try {
-        if (params.target === 'folder') {
+        if (params.target === 'app') {
+          // アプリ内ターミナル: renderer が pty を作るので、場所と指示だけ返す
+          extra = { cwd: folder ?? os.homedir(), prompt, title: h.title || c.subject.slice(0, 20) };
+          detail = 'アプリ内ターミナルで Claude Code';
+        } else         if (params.target === 'folder') {
           if (!folder) return { status: 'error', error: 'フォルダがありません' };
           shell.showItemInFolder(folder);
           detail = 'Finder で表示';
@@ -868,7 +873,7 @@ export function createPartner(host: PartnerHost): Partner {
       });
       journal({ kind: 'decided', text: `作業へ: ${detail} — 「${c.subject.slice(0, 40)}」`, caseId: c.id, accountEmail: c.accountEmail });
       pushState();
-      return { status: 'done', detail };
+      return { status: 'done', detail, ...extra };
     });
 
     ipcMain.handle('partner:handoffCopy', (_e, params: { caseId: string }) => {

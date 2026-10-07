@@ -396,6 +396,39 @@ export default function SettingsView() {
             </div>
 
             <div className={`space-y-4 ${partnerOff ? 'opacity-50 pointer-events-none' : ''}`}>
+              {/* モデルと考える深さ(「今日」の画面からも変えられる) */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">判定に使うモデル</label>
+                  <select value={draft.butlerModel} onChange={(e) => update('butlerModel', e.target.value as ButlerModel)} className={inputCls}>
+                    <option value="haiku">Haiku(速い・粗い)</option>
+                    <option value="sonnet">Sonnet(速い)</option>
+                    <option value="opus">Opus 5.5(推奨・最も丁寧)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">下書きに使うモデル</label>
+                  <select value={draft.butlerDraftModel} onChange={(e) => update('butlerDraftModel', e.target.value as ButlerModel)} className={inputCls}>
+                    <option value="haiku">Haiku</option>
+                    <option value="sonnet">Sonnet(速い)</option>
+                    <option value="opus">Opus 5.5(推奨・最も自然)</option>
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">考える深さ(effort)</label>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { value: 'medium' as ButlerEffort, label: 'medium' },
+                    { value: 'high' as ButlerEffort, label: 'high' },
+                    { value: 'xhigh' as ButlerEffort, label: 'xhigh(推奨)' },
+                    { value: 'max' as ButlerEffort, label: 'max(最も深い・遅い)' },
+                  ]).map((opt) => (
+                    <button key={opt.value} type="button" onClick={() => update('butlerEffort', opt.value)} className={`px-3 py-1.5 text-sm rounded transition-colors ${draft.butlerEffort === opt.value ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30' : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'}`}>{opt.label}</button>
+                  ))}
+                </div>
+                <p className="text-xs text-surface-500 mt-1">Claude CLI の --effort。判定・下書き・申し送り・作業指示書のすべてに効きます。深いほど丁寧ですが 1 回の確認が長くなります。</p>
+              </div>
               <div>
                 <label className="block text-sm text-surface-200 mb-2">自動で確認する間隔</label>
                 <ChoiceRow value={draft.partnerIntervalMinutes ?? 30} options={INTERVAL_OPTIONS} onChange={(v) => update('partnerIntervalMinutes', v)} />
@@ -651,42 +684,10 @@ export default function SettingsView() {
             <div className="rounded-lg border border-surface-700/60">
               <button onClick={() => setAdvancedOpen((v) => !v)} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-surface-300 hover:text-surface-100">
                 <span className={`text-[10px] transition-transform ${advancedOpen ? 'rotate-90' : ''}`}>▶</span>
-                詳細(モデル・上限・対象アカウント)
+                詳細(上限・対象アカウント)
               </button>
               {advancedOpen && (
                 <div className="px-3 pb-3 space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-sm text-surface-200 mb-1">判定に使うモデル</label>
-                      <select value={draft.butlerModel} onChange={(e) => update('butlerModel', e.target.value as ButlerModel)} className={inputCls}>
-                        <option value="haiku">Haiku(速い・粗い)</option>
-                        <option value="sonnet">Sonnet(速い)</option>
-                        <option value="opus">Opus 5.5(推奨・最も丁寧)</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm text-surface-200 mb-1">下書きに使うモデル</label>
-                      <select value={draft.butlerDraftModel} onChange={(e) => update('butlerDraftModel', e.target.value as ButlerModel)} className={inputCls}>
-                        <option value="haiku">Haiku</option>
-                        <option value="sonnet">Sonnet(速い)</option>
-                        <option value="opus">Opus 5.5(推奨・最も自然)</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-sm text-surface-200 mb-1">考える深さ(effort)</label>
-                    <div className="flex flex-wrap gap-2">
-                      {([
-                        { value: 'medium' as ButlerEffort, label: 'medium' },
-                        { value: 'high' as ButlerEffort, label: 'high' },
-                        { value: 'xhigh' as ButlerEffort, label: 'xhigh(推奨)' },
-                        { value: 'max' as ButlerEffort, label: 'max(最も深い・遅い)' },
-                      ]).map((opt) => (
-                        <button key={opt.value} type="button" onClick={() => update('butlerEffort', opt.value)} className={`px-3 py-1.5 text-sm rounded transition-colors ${draft.butlerEffort === opt.value ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30' : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'}`}>{opt.label}</button>
-                      ))}
-                    </div>
-                    <p className="text-xs text-surface-500 mt-1">Claude CLI の --effort。判定・下書き・申し送り・作業指示書のすべてに効きます。深いほど丁寧ですが 1 回の確認が長くなります。</p>
-                  </div>
                   <div className="grid grid-cols-3 gap-3">
                     <div>
                       <label className="block text-sm text-surface-200 mb-1">初回に遡る日数</label>

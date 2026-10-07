@@ -17,7 +17,8 @@ const TITLES: Record<ViewType, string> = {
   project: 'プロジェクト',
   audit: '監査',
   proposal: '提案',
-  chat: 'Chat',
+  chat: 'ターミナル',
+  terminal: 'ターミナル',
   junk: 'ゴミメール',
   settings: '設定',
 };

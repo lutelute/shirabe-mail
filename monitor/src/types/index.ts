@@ -322,6 +322,7 @@ export interface ShirabeDigest {
 // === View Navigation ===
 export type ViewType =
   | 'today'
+  | 'terminal'
   | 'shirabe'
   | 'mail'
   | 'calendar'
@@ -695,7 +696,19 @@ export interface CaseHandoff {
   takenBy?: string;             // 'terminal' / 'finderai' / 'clipboard' / 'cli:<cwd>' / 'mcp'
 }
 
-export type HandoffTarget = 'terminal' | 'finderai' | 'folder';
+export type HandoffTarget = 'terminal' | 'finderai' | 'folder' | 'app';   // app = アプリ内ターミナルで Claude Code
+
+// アプリ内ターミナルのセッション(node-pty)
+export interface PtySession {
+  id: string;
+  title: string;
+  cwd: string;
+  command?: string[];     // 省略時はログインシェル
+  createdAt: string;
+  alive: boolean;
+  exitCode?: number;
+  caseId?: string;        // 案件から開いたとき
+}
 
 export interface ButlerGroupItem {
   mailId: number;
@@ -922,12 +935,14 @@ export interface ElectronAPI {
   exportAnalysis: (content: string, filename: string) => Promise<{ success: boolean; path?: string; error?: string }>;
   // Claude Code launcher
   openClaudeCode: () => Promise<void>;
-  // PTY (Chat)
-  ptyCreate: () => Promise<void>;
-  ptyWrite: (data: string) => Promise<void>;
-  ptyResize: (cols: number, rows: number) => Promise<void>;
-  ptyDestroy: () => Promise<void>;
-  onPtyData: (callback: (data: string) => void) => () => void;
+  // PTY(アプリ内ターミナル、複数セッション)
+  ptyCreate: (params?: { id?: string; title?: string; cwd?: string; command?: string[]; cols?: number; rows?: number; caseId?: string }) => Promise<PtySession>;
+  ptyWrite: (id: string, data: string) => Promise<void>;
+  ptyResize: (id: string, cols: number, rows: number) => Promise<void>;
+  ptyDestroy: (id: string) => Promise<void>;
+  ptyList: () => Promise<PtySession[]>;
+  onPtyData: (callback: (id: string, data: string) => void) => () => void;
+  onPtyExit: (callback: (id: string, code: number) => void) => () => void;
   // Junk detection
   detectJunkEmails: (mails: MailItem[], apiKey: string) => Promise<JunkClassification[]>;
   // IMAP operations
@@ -1009,7 +1024,7 @@ export interface ElectronAPI {
   partnerGetProfile: () => Promise<{ content: string; path: string; sources: string[] }>;
   // 作業への受け渡し
   partnerHandoffPrepare: (params: { caseId: string; instruction?: string }) => Promise<{ status: string; handoff?: CaseHandoff; error?: string }>;
-  partnerHandoffOpen: (params: { caseId: string; target: HandoffTarget }) => Promise<{ status: string; detail?: string; error?: string }>;
+  partnerHandoffOpen: (params: { caseId: string; target: HandoffTarget }) => Promise<{ status: string; detail?: string; cwd?: string; prompt?: string; title?: string; error?: string }>;
   partnerPickFolder: (params: { caseId: string }) => Promise<{ status: string; folder?: string; error?: string }>;
   partnerDraftToEmClient: (params: { caseId: string; body?: string }) => Promise<{ status: string; folder?: string; fallback?: 'compose'; error?: string }>;
   partnerHandoffCopy: (params: { caseId: string }) => Promise<{ status: string; text?: string; error?: string }>;
