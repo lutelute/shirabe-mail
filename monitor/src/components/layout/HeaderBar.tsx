@@ -7,7 +7,7 @@ import type { ViewType } from '../../types';
 
 const TITLES: Record<ViewType, string> = {
   today: '今日',
-  shirabe: 'ダッシュボード',
+  shirabe: '見通し',
   mail: 'メール',
   calendar: 'カレンダー',
   task: 'タスク',

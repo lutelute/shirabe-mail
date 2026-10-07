@@ -14,3 +14,4 @@ logs/
 # Claude Code local work records (handover notes, scheduler lock)
 .claude/handover/
 .claude/scheduled_tasks.lock
+.playwright-mcp/

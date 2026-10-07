@@ -16,7 +16,7 @@ import ProposalView from './views/ProposalView';
 import ChatView from './views/ChatView';
 import JunkView from './views/JunkView';
 import SettingsView from './views/SettingsView';
-import ShirabeView from './views/ShirabeView';
+import OutlookView from './views/OutlookView';
 import TodayView from './views/TodayView';
 import SetupWizard from './components/SetupWizard';
 
@@ -36,11 +36,12 @@ export default function App() {
     if (settings.theme === 'paper') body.classList.add('theme-paper');
   }, [settings.theme]);
 
-  // ⌘, で設定、⌘1 で今日
+  // ⌘, で設定、⌘1 で今日、⌘2 で見通し
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); setActiveView('settings'); }
       if ((e.metaKey || e.ctrlKey) && e.key === '1') { e.preventDefault(); setActiveView('today'); }
+      if ((e.metaKey || e.ctrlKey) && e.key === '2') { e.preventDefault(); setActiveView('shirabe'); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -49,7 +50,7 @@ export default function App() {
   const renderContent = () => {
     switch (activeView) {
       case 'today': return <TodayView onNavigate={setActiveView} />;
-      case 'shirabe': return <ShirabeView onNavigate={setActiveView} />;
+      case 'shirabe': return <OutlookView onNavigate={setActiveView} />;
       case 'mail': return <MailView onNavigate={setActiveView} />;
       case 'calendar': return <CalendarView onNavigate={setActiveView} />;
       case 'task': return <TaskView />;

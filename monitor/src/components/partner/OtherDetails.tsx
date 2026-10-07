@@ -9,9 +9,17 @@ import { Chip, PrimaryButton, SubtleButton, GhostButton, Spinner, AutoTextarea, 
 function Head({ chips, title, sub, right }: { chips?: React.ReactNode; title: string; sub?: string; right?: React.ReactNode }) {
   return (
     <header>
-      <div className="flex items-center gap-1.5 flex-wrap">{chips}<span className="ml-auto text-[11px] text-ink-3 tnum">{right}</span></div>
-      <h2 className="mt-2 text-[17px] font-semibold text-ink leading-snug">{title}</h2>
-      {sub && <p className="text-[12.5px] text-ink-2 mt-0.5">{sub}</p>}
+      <h2 className="text-[20px] font-semibold text-ink leading-snug">{title}</h2>
+      <div className="mt-1.5 text-[12px] leading-5 text-ink-2">
+        {(sub || right) && (
+          <div className="flex items-center gap-x-2 flex-wrap">
+            {sub && <span>{sub}</span>}
+            {sub && right && <span className="text-ink-3">·</span>}
+            {right && <span className="tnum text-ink-3">{right}</span>}
+          </div>
+        )}
+        {chips && <div className="flex items-center gap-1.5 flex-wrap mt-1">{chips}</div>}
+      </div>
     </header>
   );
 }
@@ -24,7 +32,8 @@ export function OutboxDetail({ o, busy, onSendNow, onCancel }: { o: OutboxItem; 
   const remain = new Date(o.sendAt).getTime() - now;
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+       <div className="detail-prose space-y-4">
         <Head
           chips={<>
             <Chip label={o.kind === 'nudge' ? '催促' : o.kind === 'reply' ? '返信' : '新規'} cls="bg-primary-soft text-primary border-primary/30" />
@@ -48,8 +57,9 @@ export function OutboxDetail({ o, busy, onSendNow, onCancel }: { o: OutboxItem; 
           <Label>本文(署名と引用は送信時に付きます)</Label>
           <pre className="draft-text whitespace-pre-wrap font-sans text-ink bg-card border border-hairline rounded-md px-4 py-3">{o.body}</pre>
         </section>
+       </div>
       </div>
-      <footer className="border-t border-hairline px-6 py-3 bg-card flex items-center gap-2">
+      <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
         {o.status === 'scheduled' && <PrimaryButton size="lg" onClick={() => onSendNow(o)} disabled={busy}>{Icon.send}今すぐ送る</PrimaryButton>}
         {o.status === 'failed' && <PrimaryButton size="lg" onClick={() => onSendNow(o)} disabled={busy}>{Icon.refresh}もう一度</PrimaryButton>}
         {(o.status === 'scheduled' || o.status === 'failed') && <SubtleButton danger onClick={() => onCancel(o)} disabled={busy}>{o.status === 'failed' ? 'やめる' : '取り消し'}</SubtleButton>}
@@ -74,7 +84,8 @@ export function FollowUpDetail({ f, busy, canSend, onAction }: { f: FollowUp; bu
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+       <div className="detail-prose space-y-4">
         <Head
           chips={<>
             <Chip mono label={`${f.daysWaiting}日待ち`} cls={waitCls} />
@@ -84,7 +95,7 @@ export function FollowUpDetail({ f, busy, canSend, onAction }: { f: FollowUp; bu
           sub={`${f.to || f.toAddress} へ ${fmtDateTime(f.sentAt)} に送信`}
         />
         {f.ask && (
-          <section>
+          <section className="border-l-2 border-primary pl-3">
             <Label>先生が求めたこと</Label>
             <p className="text-[14px] text-ink leading-relaxed">{f.ask}</p>
           </section>
@@ -113,8 +124,9 @@ export function FollowUpDetail({ f, busy, canSend, onAction }: { f: FollowUp; bu
             </div>
           )}
         </section>
+       </div>
       </div>
-      <footer className="border-t border-hairline px-6 py-3 bg-card flex items-center gap-2 flex-wrap">
+      <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
         {(f.nudgeDraft || composing) ? (
           <PrimaryButton size="lg" onClick={() => onAction(f, 'nudge', body)} disabled={busy || !body.trim()}>{Icon.send}{canSend ? 'この内容で催促する' : 'eM Client で催促する'}</PrimaryButton>
         ) : (
@@ -133,7 +145,8 @@ export function GroupDetail({ g, busy, onUndoTidy, onApprove, onRule }: { g: But
   const kindLabel = g.kind === 'spam_delete' ? '迷惑メール(承認待ち)' : g.kind === 'tidied' ? '片付け済み' : '一斉配信(残したまま)';
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+       <div className="detail-prose space-y-4">
         <Head
           chips={<Chip label={kindLabel} cls={g.kind === 'spam_delete' ? 'bg-danger-soft text-danger border-danger/30' : 'bg-card-2 text-ink-2 border-hairline'} />}
           title={g.label}
@@ -151,8 +164,9 @@ export function GroupDetail({ g, busy, onUndoTidy, onApprove, onRule }: { g: But
             </li>
           ))}
         </ul>
+       </div>
       </div>
-      <footer className="border-t border-hairline px-6 py-3 bg-card flex items-center gap-2">
+      <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
         {g.kind === 'tidied' && !g.undone && <PrimaryButton size="lg" onClick={() => onUndoTidy(g)} disabled={busy}>{Icon.undo}受信箱へ戻す</PrimaryButton>}
         {g.kind === 'spam_delete' && (
           <>
@@ -169,7 +183,7 @@ export function GroupDetail({ g, busy, onUndoTidy, onApprove, onRule }: { g: But
 // ---- 日誌 ----
 export function JournalDetail({ j }: { j: JournalEntry }) {
   return (
-    <div className="px-6 py-5 space-y-3">
+    <div className="px-6 py-5 space-y-3 detail-prose">
       <div className="text-[11px] text-ink-3 tnum">{new Date(j.at).toLocaleString('ja-JP')}</div>
       <p className={`text-[14px] leading-relaxed ${j.kind === 'error' ? 'text-danger' : 'text-ink'}`}>{j.text}</p>
       {(j.caseId || j.accountEmail) && <p className="text-[11.5px] text-ink-3">{j.accountEmail}{j.caseId ? ` · ${j.caseId}` : ''}</p>}

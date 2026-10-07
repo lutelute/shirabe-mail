@@ -264,6 +264,64 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   }, [selectedId]);
 
   const nothingToDo = loaded && !!state?.digest && groups.pending === 0 && groups.outboxActive.length === 0 && groups.followActive.length === 0;
+
+  // ---- 上部の要約チップ(クリックで該当セクションへ) ----
+  const missingCases = useMemo(() => groups.cases.filter((c) => c.status === 'open' && !!c.event && c.calendarStatus === 'missing'), [groups]);
+  type SummaryKey = Section | 'missing';
+  const summary = useMemo(() => ([
+    { key: 'decide' as SummaryKey, label: '決める', n: groups.decisions.length, tone: 'danger' },
+    { key: 'send' as SummaryKey, label: '送る', n: groups.sendables.length, tone: 'primary' },
+    { key: 'act' as SummaryKey, label: 'やる', n: groups.actions.length, tone: 'ink' },
+    { key: 'outbox' as SummaryKey, label: '送信予定', n: groups.outboxActive.length, tone: 'ink' },
+    { key: 'followup' as SummaryKey, label: '返事待ち', n: groups.followActive.length, tone: 'ink' },
+    { key: 'missing' as SummaryKey, label: '未登録', n: missingCases.length, tone: 'danger' },
+  ] as Array<{ key: SummaryKey; label: string; n: number; tone: 'danger' | 'primary' | 'ink' }>).filter((s) => s.n > 0), [groups, missingCases]);
+
+  const sectionOf = useCallback((c: ButlerCase): Section => (
+    groups.decisions.includes(c) ? 'decide' : groups.sendables.includes(c) ? 'send' : groups.actions.includes(c) ? 'act' : groups.fyi.includes(c) ? 'fyi' : 'later'
+  ), [groups]);
+
+  const jumpTo = useCallback((key: SummaryKey) => {
+    let section: Section;
+    let targetId: string | null = null;
+    if (key === 'missing') {
+      const c = missingCases[0];
+      if (!c) return;
+      section = sectionOf(c);
+      targetId = `case:${c.id}`;
+    } else {
+      section = key;
+    }
+    setOpenSections((prev) => (prev[section] ? prev : { ...prev, [section]: true }));
+    // 展開を待ってから選択・スクロール
+    setTimeout(() => {
+      const header = listRef.current?.querySelector(`[data-section="${section}"]`);
+      header?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      if (targetId) setSelectedId(targetId);
+      else {
+        const first = listRef.current?.querySelector(`[data-section-rows="${section}"] [data-queue-row]`) as HTMLElement | null;
+        const id = first?.getAttribute('data-queue-id');
+        if (id) setSelectedId(id);
+      }
+    }, 30);
+  }, [missingCases, sectionOf]);
+
+  // 「見通し」などから案件を指定して来たとき(localStorage 'shirabe_pending_case' 経由)
+  useEffect(() => {
+    if (!state?.digest) return;
+    let pending: string | null = null;
+    try { pending = localStorage.getItem('shirabe_pending_case'); } catch { /* ignore */ }
+    if (!pending) return;
+    try { localStorage.removeItem('shirabe_pending_case'); } catch { /* ignore */ }
+    const c = (state.digest.cases ?? []).find((x) => x.id === pending);
+    if (!c) return;
+    const section = sectionOf(c);
+    setOpenSections((prev) => (prev[section] ? prev : { ...prev, [section]: true }));
+    setTimeout(() => {
+      setSelectedId(`case:${c.id}`);
+      listRef.current?.querySelector(`[data-queue-id="case:${CSS.escape(c.id)}"]`)?.scrollIntoView({ block: 'center' });
+    }, 60);
+  }, [state?.digest, sectionOf]);
   const canSendFor = (email: string) => !!state?.canSend?.[email];
   const sendDelay = settings.partnerSendDelayMinutes ?? 0;
 
@@ -347,7 +405,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   };
 
   const list = (
-    <div ref={listRef} className={`${wide ? 'w-[440px] flex-shrink-0 border-r border-hairline' : 'w-full'} h-full overflow-y-auto bg-card`}>
+    <div ref={listRef} className="h-full overflow-y-auto bg-card">
       {nothingToDo && !running && (
         <div className="px-5 py-8 text-center border-b border-hairline">
           <div className="mx-auto w-9 h-9 rounded-full bg-ok-soft text-ok flex items-center justify-center mb-2">{Icon.check}</div>
@@ -357,7 +415,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
       )}
       {sections.map((s) => (
         <section key={s.section}>
-          <div className="sticky top-0 z-10 bg-card/95 backdrop-blur border-b border-hairline">
+          <div className="sticky top-0 z-10 bg-card/95 backdrop-blur border-b border-hairline" data-section={s.section}>
             <button
               onClick={() => s.collapsible && toggleSection(s.section)}
               className={`w-full flex items-center gap-2 px-4 h-9 text-left ${s.collapsible ? 'hover:bg-card-2' : 'cursor-default'}`}
@@ -371,14 +429,16 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           {s.items.length === 0 && !s.collapsible && (
             <div className="px-4 py-2.5 text-[12px] text-ink-3 border-b border-hairline/70">ありません</div>
           )}
+          <div data-section-rows={s.section}>
           {s.items.map((item) => (
-            <div key={item.id}>
+            <div key={item.id} data-queue-id={item.id}>
               <QueueRow item={item} selected={item.id === selectedId} onSelect={() => setSelectedId(item.id)} />
               {!wide && item.id === selectedId && (
                 <div className="border-b border-hairline bg-paper">{renderDetail(item)}</div>
               )}
             </div>
           ))}
+          </div>
         </section>
       ))}
       {SECTION_ORDER.length > 0 && digest?.sources && digest.sources.length > 0 && (
@@ -394,9 +454,26 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
       )}
 
       <div className="px-6 pt-4 pb-4 flex-shrink-0">
-        <div className="flex items-baseline justify-between mb-3">
-          <h1 className="text-[22px] font-semibold text-ink tracking-tight">今日</h1>
-          <span className="text-[12.5px] text-ink-2">{todayLabel()}</span>
+        <div className="flex items-center gap-4 mb-3">
+          <h1 className="text-[22px] font-semibold text-ink tracking-tight flex-shrink-0">今日</h1>
+          <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+            {summary.map((s) => (
+              <button
+                key={s.key}
+                onClick={() => jumpTo(s.key)}
+                title={`${s.label}へ`}
+                className={`app-no-drag inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border text-[11.5px] transition-colors ${
+                  s.tone === 'danger' ? 'bg-danger-soft text-danger border-danger/30 hover:border-danger/60'
+                    : s.tone === 'primary' ? 'bg-primary-soft text-primary border-primary/30 hover:border-primary/60'
+                      : 'bg-card text-ink-2 border-hairline hover:border-hairline-2 hover:text-ink'
+                }`}
+              >
+                <span>{s.label}</span>
+                <span className="tnum font-semibold">{s.n}</span>
+              </button>
+            ))}
+          </div>
+          <span className="ml-auto text-[12.5px] text-ink-2 flex-shrink-0">{todayLabel()}</span>
         </div>
         <BriefCard
           digest={digest} loaded={loaded} running={running} progress={progress}
@@ -405,10 +482,12 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
         />
       </div>
 
-      <div className="flex-1 min-h-0 mx-6 mb-6 rounded-xl border border-hairline overflow-hidden flex bg-card shadow-card">
-        {list}
+      <div className="flex-1 min-h-0 mx-6 mb-6 flex gap-4">
+        <div className={`${wide ? 'w-[440px] flex-shrink-0' : 'w-full'} h-full rounded-xl border border-hairline overflow-hidden bg-card shadow-card`}>
+          {list}
+        </div>
         {wide && (
-          <div className="flex-1 min-w-0 h-full bg-paper">
+          <div className="flex-1 min-w-0 h-full rounded-xl border border-hairline overflow-hidden bg-card shadow-card">
             {selected ? (
               <div className="h-full">{renderDetail(selected)}</div>
             ) : (

@@ -140,7 +140,7 @@ body {
 button:focus:not(:focus-visible), input:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: none; }
 
 /* 申し送り: 同僚からのメモの読み味 */
-.brief-text { font-size: 15px; line-height: 1.8; letter-spacing: 0.01em; }
+.brief-text { font-size: 15px; line-height: 1.85; letter-spacing: 0.01em; max-width: 62em; }
 
 /* 下書きエディタ・本文 */
 .draft-text { font-size: 13px; line-height: 1.75; }
@@ -151,7 +151,11 @@ textarea.draft-editor { resize: none; overflow: hidden; }
 .rail-item:hover .rail-tip, .rail-item:focus-visible .rail-tip { opacity: 1; transform: translateX(0); }
 
 /* 行の優先度バー */
-.prio-bar { width: 3px; border-radius: 2px; align-self: stretch; }
+.prio-bar { width: 3px; border-radius: 2px; align-self: stretch; flex-shrink: 0; transition: width .1s ease; }
+.prio-bar.is-selected { width: 5px; }
+
+/* 詳細パネルの文章幅 */
+.detail-prose { max-width: 760px; }
 
 /* --- Paper: 旧ビューで直書きされた色の読みやすさを担保 --- */
 .theme-paper .text-white { color: var(--ink) !important; }

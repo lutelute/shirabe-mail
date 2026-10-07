@@ -5,7 +5,8 @@ import type { CaseVariant } from './queue';
 import { Chip, DeadlineChip, PrimaryButton, SubtleButton, GhostButton, Spinner, AutoTextarea, Icon, PRIORITY_META, CATEGORY_META, TIER_META, fmtDateTime, fmtTime, fmtEvent, HANDOFF_TARGET_LABEL } from './partnerUi';
 
 // =====================================================================
-// 案件の詳細パネル: 見出し → 予定 → 要件/要約/根拠 → 決める → (作業に移る) → 下書き → 操作
+// 案件の詳細パネル: 件名 → メタ(差出人・受信・関係・期限・予定) → 先生がすること → 要約/根拠 → 決める → (作業に移る) → 下書き → 操作
+//   文章は detail-prose(760px)に収める。操作フッタは常に見える。
 // =====================================================================
 
 export interface CaseDetailProps {
@@ -30,6 +31,10 @@ export interface CaseDetailProps {
   onPickFolder: (c: ButlerCase) => void;
   onAddToCalendar: (c: ButlerCase) => void;
 }
+
+const Label = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
+  <div className={`text-[11px] font-medium text-ink-3 tracking-wide ${className}`}>{children}</div>
+);
 
 export default function CaseDetail(p: CaseDetailProps) {
   const { c, variant, canSend, busy, handoffBusy } = p;
@@ -81,7 +86,7 @@ export default function CaseDetail(p: CaseDetailProps) {
   const draftSection = showDraft && (
     <section>
       <div className="flex items-center gap-2 mb-1.5">
-        <div className="text-[11px] font-medium text-ink-3 tracking-wide">返信の下書き</div>
+        <Label>返信の下書き</Label>
         {c.decision?.answer && <Chip label={`決定: ${c.decision.answer}`} cls="bg-ok-soft text-ok border-ok/30" />}
         {c.draftEdited && !dirty && <Chip label="手直し済み" cls="bg-card-2 text-ink-3 border-hairline" />}
         {dirty && <Chip label="未保存" cls="bg-warn-soft text-warn border-warn/30" />}
@@ -102,7 +107,7 @@ export default function CaseDetail(p: CaseDetailProps) {
           </div>
         </>
       ) : (
-        <div className="rounded-md border border-dashed border-hairline-2 px-4 py-3 flex items-center gap-3">
+        <div className="rounded-md border border-dashed border-hairline-2 px-4 py-2.5 flex items-center gap-3">
           <span className="text-[12.5px] text-ink-2">{c.draftStatus === 'failed' ? '下書きの用意に失敗しました。' : '下書きはまだありません。'}</span>
           <SubtleButton size="sm" onClick={() => p.onDraft(c)} disabled={busy}>下書きを作る</SubtleButton>
           {busy && <Spinner />}
@@ -113,76 +118,84 @@ export default function CaseDetail(p: CaseDetailProps) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-        {/* 見出し */}
-        <header>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <Chip label={pm.label} cls={pm.cls} />
-            <Chip label={cm.label} cls={cm.cls} />
-            <Chip label={tm.label} cls={tm.cls} title={c.senderStats ? `受信${c.senderStats.received} / 返信${c.senderStats.replied} / 送信${c.senderStats.sentTo}` : undefined} />
-            <DeadlineChip deadline={c.deadline} />
-            {c.addressedToMe === 'cc' && <Chip label="Cc" cls="bg-card-2 text-ink-3 border-hairline" />}
-            {c.addressedToMe === 'list' && <Chip label="ML" cls="bg-card-2 text-ink-3 border-hairline" />}
-            {c.isRead && <Chip label="既読" cls="bg-card-2 text-ink-3 border-hairline" title="eM Client で既に開いています" />}
-            <span className="ml-auto text-[11px] text-ink-3 tnum">{fmtDateTime(c.receivedAt)} · スレッド {c.threadCount}通</span>
-          </div>
-          <h2 className="mt-2 text-[17px] font-semibold text-ink leading-snug">{c.subject || '(件名なし)'}</h2>
-          <p className="text-[12.5px] text-ink-2 mt-0.5">{c.fromName ? `${c.fromName} <${c.fromAddress}>` : c.fromAddress}</p>
-          {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} />}
-        </header>
-
-        {/* 要件・要約・根拠 */}
-        {c.ask && (
-          <section>
-            <div className="text-[11px] font-medium text-ink-3 tracking-wide mb-1">先生がすること</div>
-            <p className="text-[14px] text-ink leading-relaxed">{c.ask}</p>
-          </section>
-        )}
-        {c.summary && (
-          <section>
-            <div className="text-[11px] font-medium text-ink-3 tracking-wide mb-1">要約</div>
-            <p className="text-[13px] text-ink-2 leading-relaxed whitespace-pre-wrap">{c.summary}</p>
-          </section>
-        )}
-        {c.reason && <p className="text-[11.5px] text-ink-3">根拠: {c.reason}</p>}
-
-        {/* 決める */}
-        {needsDecision && c.decision && (
-          <section className="rounded-lg border border-warn/40 bg-warn-soft p-4">
-            <div className="text-[11px] font-medium text-warn tracking-wide mb-1">決めてください</div>
-            <p className="text-[14.5px] text-ink font-medium mb-3">{c.decision.question}</p>
-            <div className="flex flex-wrap gap-2">
-              {c.decision.options.map((opt, i) => (
-                <button
-                  key={opt}
-                  disabled={busy}
-                  onClick={() => p.onAnswer(c, opt)}
-                  className="app-no-drag h-8 px-3 rounded-md text-[13px] bg-card text-ink border border-hairline-2 hover:border-primary hover:text-primary transition-colors disabled:opacity-40"
-                >
-                  <span className="text-ink-3 tnum mr-1.5">{i + 1}</span>{opt}
-                </button>
-              ))}
+      <div className="flex-1 overflow-y-auto px-6 py-5">
+        <div className="detail-prose space-y-4">
+          {/* 件名とメタ */}
+          <header>
+            <h2 className="text-[20px] font-semibold text-ink leading-snug">{c.subject || '(件名なし)'}</h2>
+            <div className="mt-1.5 text-[12px] leading-5 text-ink-2">
+              <div className="flex items-center gap-x-2 flex-wrap">
+                <span className="text-ink">{c.fromName ? `${c.fromName} <${c.fromAddress}>` : c.fromAddress}</span>
+                <span className="text-ink-3">·</span>
+                <span className="tnum text-ink-3">{fmtDateTime(c.receivedAt)}</span>
+                <span className="text-ink-3">·</span>
+                <span className="text-ink-3">スレッド {c.threadCount}通</span>
+                {c.isRead && <><span className="text-ink-3">·</span><span className="text-ink-3" title="eM Client で既に開いています">既読</span></>}
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                <Chip label={pm.label} cls={pm.cls} />
+                <Chip label={cm.label} cls={cm.cls} />
+                <Chip label={tm.label} cls={tm.cls} title={c.senderStats ? `受信${c.senderStats.received} / 返信${c.senderStats.replied} / 送信${c.senderStats.sentTo}` : undefined} />
+                <DeadlineChip deadline={c.deadline} />
+                {c.addressedToMe === 'cc' && <Chip label="Cc" cls="bg-card-2 text-ink-3 border-hairline" />}
+                {c.addressedToMe === 'list' && <Chip label="ML" cls="bg-card-2 text-ink-3 border-hairline" />}
+              </div>
+              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} />}
             </div>
-            <div className="flex items-center gap-2 mt-3">
-              <input
-                value={other}
-                onChange={(e) => setOther(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && other.trim()) { p.onAnswer(c, other.trim()); setOther(''); } }}
-                placeholder="その他(自由に書く)"
-                className="app-no-drag flex-1 h-8 px-3 text-[13px] bg-card border border-hairline rounded-md focus:border-primary/60 text-ink"
-              />
-              <SubtleButton onClick={() => { if (other.trim()) { p.onAnswer(c, other.trim()); setOther(''); } }} disabled={busy || !other.trim()}>決める</SubtleButton>
-            </div>
-            {busy && <div className="mt-2 text-[11.5px] text-ink-2 flex items-center gap-1.5"><Spinner /> 下書きを用意しています…</div>}
-          </section>
-        )}
+          </header>
 
-        {/* 作業に移る / 下書き — やること(action)は作業を先に、返信は下書きを先に */}
-        {variant === 'action' ? (<>{handoffSection}{draftSection}</>) : (<>{draftSection}{handoffSection}</>)}
+          {/* 先生がすること(強調) */}
+          {c.ask && (
+            <section className="border-l-2 border-primary pl-3">
+              <Label className="mb-0.5">先生がすること</Label>
+              <p className="text-[14px] text-ink leading-relaxed">{c.ask}</p>
+            </section>
+          )}
+          {(c.summary || c.reason) && (
+            <section className="space-y-1">
+              {c.summary && <p className="text-[13px] text-ink-2 leading-relaxed whitespace-pre-wrap">{c.summary}</p>}
+              {c.reason && <p className="text-[12px] text-ink-3">根拠: {c.reason}</p>}
+            </section>
+          )}
+
+          {/* 決める */}
+          {needsDecision && c.decision && (
+            <section className="rounded-lg border border-warn/40 bg-warn-soft px-4 py-3">
+              <Label className="text-warn mb-0.5">決めてください</Label>
+              <p className="text-[15px] font-semibold text-ink mb-2">{c.decision.question}</p>
+              <div className="flex flex-wrap gap-1.5">
+                {c.decision.options.map((opt, i) => (
+                  <button
+                    key={opt}
+                    disabled={busy}
+                    onClick={() => p.onAnswer(c, opt)}
+                    className="app-no-drag h-8 px-3 rounded-md text-[13px] bg-card text-ink border border-hairline-2 hover:border-primary hover:text-primary transition-colors disabled:opacity-40"
+                  >
+                    <span className="text-ink-3 tnum mr-1.5">{i + 1}</span>{opt}
+                  </button>
+                ))}
+              </div>
+              <div className="flex items-center gap-2 mt-2">
+                <input
+                  value={other}
+                  onChange={(e) => setOther(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && other.trim()) { p.onAnswer(c, other.trim()); setOther(''); } }}
+                  placeholder="その他(自由に書く)"
+                  className="app-no-drag flex-1 h-8 px-3 text-[13px] bg-card border border-hairline rounded-md focus:border-primary/60 text-ink"
+                />
+                <SubtleButton onClick={() => { if (other.trim()) { p.onAnswer(c, other.trim()); setOther(''); } }} disabled={busy || !other.trim()}>決める</SubtleButton>
+                {busy && <span className="text-[11.5px] text-ink-2 flex items-center gap-1.5"><Spinner /> 下書きを用意しています…</span>}
+              </div>
+            </section>
+          )}
+
+          {/* 作業に移る / 下書き — やること(action)は作業を先に、返信は下書きを先に */}
+          {variant === 'action' ? (<>{handoffSection}{draftSection}</>) : (<>{draftSection}{handoffSection}</>)}
+        </div>
       </div>
 
-      {/* 操作 */}
-      <footer className="border-t border-hairline px-6 py-3 bg-card flex items-center gap-2 flex-wrap">
+      {/* 操作(常に見える) */}
+      <footer className="flex-shrink-0 border-t border-hairline px-6 min-h-[52px] py-1.5 bg-card flex items-center gap-2 flex-wrap">
         {showDraft && (c.draft || dirty) && (
           <PrimaryButton size="lg" onClick={send} disabled={busy || !body.trim()} title={canSend ? '送信までの猶予の間は取り消せます' : 'eM Client の作成画面を開きます'}>
             {Icon.send}{sendLabel}
@@ -211,10 +224,10 @@ function EventRow({ c, busy, onAdd }: { c: ButlerCase; busy: boolean; onAdd: (c:
   const ev = c.event!;
   const status = c.calendarStatus ?? 'unknown';
   return (
-    <div className="mt-2 flex items-center gap-2 flex-wrap text-[12.5px]">
+    <div className="mt-1 flex items-center gap-1.5 flex-wrap text-[12px]">
       <span className="text-ink-3">{Icon.calendar}</span>
       <span className="text-ink">
-        予定: <span className="tnum">{fmtEvent(ev)}</span> {ev.title}{ev.location ? <span className="text-ink-2"> @{ev.location}</span> : null}
+        <span className="tnum">{fmtEvent(ev)}</span> {ev.title}{ev.location ? <span className="text-ink-2"> @{ev.location}</span> : null}
       </span>
       {status === 'missing' && <Chip label="カレンダー未登録" cls="bg-danger-soft text-danger border-danger/30" />}
       {status === 'registered' && <Chip label={`登録済み${c.calendarMatch ? `: ${c.calendarMatch}` : ''}`} cls="bg-ok-soft text-ok border-ok/30" />}
@@ -240,16 +253,13 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
   const [extra, setExtra] = useState('');
   useEffect(() => { setShowAll(false); setExtra(''); }, [c.id]);
 
+  // 未準備: 1 行のバー
   if (!h) {
     return (
-      <section className="rounded-lg border border-hairline bg-card p-4">
-        <div className="flex items-center gap-3 flex-wrap">
-          <div className="flex-1 min-w-0">
-            <div className="text-[11px] font-medium text-ink-3 tracking-wide mb-0.5">作業に移る</div>
-            <p className="text-[12.5px] text-ink-2">該当フォルダを探して作業指示書を用意します。ターミナルの Claude Code や FinderAI にそのまま渡せます。</p>
-          </div>
-          <PrimaryButton onClick={() => onPrepare(c)} disabled={busy} title="w">{busy ? <><Spinner /> 用意しています…</> : <>{Icon.terminal}作業指示書を作る</>}</PrimaryButton>
-        </div>
+      <section className="rounded-lg border border-hairline bg-card px-4 h-11 flex items-center gap-3">
+        <Label>作業に移る</Label>
+        <span className="flex-1 min-w-0 text-[12.5px] text-ink-2 truncate">該当フォルダを探して作業指示書を用意します。ターミナルの Claude Code や FinderAI に渡せます。</span>
+        <PrimaryButton size="sm" onClick={() => onPrepare(c)} disabled={busy} title="w">{busy ? <><Spinner /> 用意しています…</> : <>{Icon.terminal}作業指示書を作る</>}</PrimaryButton>
       </section>
     );
   }
@@ -262,7 +272,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
   return (
     <section className="rounded-lg border border-hairline bg-card p-4 space-y-3">
       <div className="flex items-center gap-2">
-        <div className="text-[11px] font-medium text-ink-3 tracking-wide">作業に移る</div>
+        <Label>作業に移る</Label>
         <span className="text-[13.5px] font-semibold text-ink">{h.title}</span>
         {busy && <Spinner />}
         {h.lastOpenedAt && h.lastTarget && (
@@ -292,7 +302,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
 
       {/* 指示書 */}
       <div>
-        <div className="text-[11px] font-medium text-ink-3 tracking-wide mb-1">作業指示書</div>
+        <Label className="mb-1">作業指示書</Label>
         <pre className="whitespace-pre-wrap font-sans text-[12.5px] text-ink leading-relaxed rounded-md border border-hairline bg-paper px-3 py-2.5 max-h-[420px] overflow-y-auto">{preview}{!showAll && truncated ? '\n…' : ''}</pre>
         <div className="flex items-center gap-2 mt-1.5">
           {truncated && <GhostButton onClick={() => setShowAll((v) => !v)}>{showAll ? '先頭だけ表示' : 'すべて表示'}</GhostButton>}

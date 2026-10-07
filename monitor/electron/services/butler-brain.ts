@@ -366,6 +366,11 @@ const VALID_CATEGORY = new Set(['reply', 'action', 'fyi', 'noise', 'spam']);
 const VALID_PRIORITY = new Set(['P1', 'P2', 'P3', 'P4']);
 const VALID_REPLY_KIND = new Set(['ack', 'thanks', 'schedule', 'answer', 'accept', 'decline', 'other']);
 
+/** CLI 経由で混ざることのある置換文字(U+FFFD)を落とす */
+export function cleanAiText(s: unknown): string {
+  return String(s ?? '').replace(/\uFFFD/g, '').trim();
+}
+
 /** AI の event を検証。日付が読めない・過去(昨日より前)なら null */
 export function normalizeEvent(raw: unknown, today: string): CaseEvent | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -392,8 +397,8 @@ export function normalizeEvent(raw: unknown, today: string): CaseEvent | null {
 export function normalizeDecision(raw: unknown): CaseDecision | null {
   if (!raw || typeof raw !== 'object') return null;
   const d = raw as { question?: unknown; options?: unknown };
-  const question = String(d.question ?? '').trim();
-  const options = Array.isArray(d.options) ? d.options.map((o) => String(o ?? '').trim()).filter(Boolean).slice(0, 5) : [];
+  const question = cleanAiText(d.question);
+  const options = Array.isArray(d.options) ? d.options.map((o) => cleanAiText(o)).filter(Boolean).slice(0, 5) : [];
   if (!question || options.length === 0) return null;
   return { question, options: Array.from(new Set(options)) };
 }
@@ -437,11 +442,11 @@ export async function classifyCases(
         id: j.id,
         category: (VALID_CATEGORY.has(String(j.category)) ? j.category : 'fyi') as ButlerCaseCategory,
         priority: (VALID_PRIORITY.has(String(j.priority)) ? j.priority : 'P3') as ButlerPriority,
-        ask: String(j.ask ?? '').trim(),
-        summary: String(j.summary ?? '').trim(),
+        ask: cleanAiText(j.ask),
+        summary: cleanAiText(j.summary),
         deadline: normalizeDeadline(j.deadline ?? null, ctx.today),
-        suggestedAction: String(j.suggestedAction ?? '').trim(),
-        reason: String(j.reason ?? '').trim(),
+        suggestedAction: cleanAiText(j.suggestedAction),
+        reason: cleanAiText(j.reason),
         needsDraft: !!j.needsDraft,
         draftHint: j.draftHint ? String(j.draftHint).trim() : undefined,
         replyKind: (VALID_REPLY_KIND.has(String(j.replyKind)) ? j.replyKind : 'other') as ReplyKind,
@@ -740,8 +745,8 @@ export async function judgeFollowUps(
       out.judgments.set(j.id, {
         id: j.id,
         needsReply: !!j.needsReply,
-        ask: String(j.ask ?? '').trim(),
-        summary: String(j.summary ?? '').trim(),
+        ask: cleanAiText(j.ask),
+        summary: cleanAiText(j.summary),
         nudgeOk: !!j.nudgeOk,
         urgency: j.urgency === 'now' || j.urgency === 'soon' ? j.urgency : 'later',
       });
