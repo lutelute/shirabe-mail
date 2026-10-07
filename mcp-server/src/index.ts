@@ -26,6 +26,7 @@ import { copyMailToFolder } from './tools/copy-mail-to-folder.js';
 import { getSentMails } from './tools/get-sent-mails.js';
 import { getDeadlineItems } from './tools/get-deadline-items.js';
 import { ensureNotesDir, findNotePath, getConversationId } from './utils.js';
+import { registerPartnerTools } from './partner/tools.js';
 
 /** Valid note tag IDs (kept in sync with the GUI's tag set). */
 const TAG_IDS = ['reply', 'action', 'hold', 'done', 'unnecessary', 'info', 'urgent'] as const;
@@ -605,6 +606,9 @@ server.tool(
     };
   },
 );
+
+// --- 相棒(v3): 今日/決める/下書き/送信予定/返事待ち/日誌 ---
+registerPartnerTools(server);
 
 // --- Start ---
 async function main() {

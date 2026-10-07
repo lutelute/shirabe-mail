@@ -1,34 +1,51 @@
+import type { ViewType } from '../../types';
+
+// =====================================================================
+// 最上部のバー(44px)。titleBarStyle: hiddenInset の信号機ボタンの横に置き、
+// 全体をウィンドウのドラッグ領域にする。
+// =====================================================================
+
+const TITLES: Record<ViewType, string> = {
+  today: '今日',
+  shirabe: 'ダッシュボード',
+  mail: 'メール',
+  calendar: 'カレンダー',
+  task: 'タスク',
+  search: '検索',
+  triage: 'トリアージ',
+  todo: 'To-Do',
+  project: 'プロジェクト',
+  audit: '監査',
+  proposal: '提案',
+  chat: 'Chat',
+  junk: 'ゴミメール',
+  settings: '設定',
+};
+
 interface HeaderBarProps {
+  activeView: ViewType;
   loading?: boolean;
   error?: string | null;
   onRefresh?: () => void;
 }
 
-export default function HeaderBar({ loading, error, onRefresh }: HeaderBarProps) {
+export default function HeaderBar({ activeView, loading, error, onRefresh }: HeaderBarProps) {
   return (
-    <header className="flex items-center justify-between px-4 py-2 bg-surface-900 border-b border-surface-700/50 flex-shrink-0">
-      <div className="flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full bg-accent-400" />
-        <h1 className="text-sm font-semibold text-surface-200 tracking-wide">調</h1>
+    <header className="app-drag h-11 flex-shrink-0 flex items-center bg-paper border-b border-hairline select-none" style={{ paddingLeft: 80 }}>
+      <div className="flex items-center gap-2.5">
+        <span className="w-6 h-6 rounded-[7px] bg-primary text-primary-ink flex items-center justify-center text-[13px] font-semibold leading-none">調</span>
+        <span className="text-[13px] text-ink-2">{TITLES[activeView] ?? ''}</span>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="ml-auto flex items-center gap-2 pr-4">
         {loading && (
-          <div className="flex items-center gap-1.5 text-surface-400 text-xs">
-            <div className="w-3 h-3 border-2 border-accent-500/30 border-t-accent-500 rounded-full animate-spin" />
-            <span>読み込み中</span>
-          </div>
+          <span className="flex items-center gap-1.5 text-ink-3 text-[11.5px]">
+            <span className="w-3 h-3 border-2 border-hairline-2 border-t-primary rounded-full animate-spin" />
+            読み込み中
+          </span>
         )}
-        {error && (
-          <span className="text-red-400 text-xs truncate max-w-xs">{error}</span>
-        )}
+        {error && <span className="text-danger text-[11.5px] truncate max-w-xs">{error}</span>}
         {onRefresh && (
-          <button
-            onClick={onRefresh}
-            disabled={loading}
-            className="px-2.5 py-1 text-xs bg-surface-800 hover:bg-surface-700 text-surface-300 rounded transition-colors disabled:opacity-40"
-          >
-            更新
-          </button>
+          <button onClick={onRefresh} disabled={loading} className="app-no-drag h-7 px-2.5 text-[11.5px] rounded-md border border-hairline bg-card text-ink-2 hover:text-ink disabled:opacity-40">更新</button>
         )}
       </div>
     </header>

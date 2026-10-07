@@ -2,12 +2,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { cleanBody } from '../mail-intel';
-import { tierFor, looksLikeBulk, looksLikeSpam, normalizeDeadline, buildClassifyPrompt, fallbackBrief, DEFAULT_PROFILE } from '../butler-brain';
+import { tierFor, looksLikeBulk, looksLikeSpam, normalizeDeadline, buildClassifyPrompt, fallbackBrief, DEFAULT_PROFILE, normalizeDecision, greetingFor, buildFollowUpPrompt, normalizeEvent } from '../butler-brain';
 import type { JudgmentContext, CaseInput } from '../butler-brain';
 import { withSenderRule, tierFromRules, EMPTY_RULES } from '../butler-rules';
-import { bumpPriorityByDeadline, tagsFor, sortCases, mergeCarryOver, addressedToMe, runButlerPipeline, noteIdFor } from '../pipeline';
+import { bumpPriorityByDeadline, tagsFor, sortCases, mergeCarryOver, addressedToMe, runButlerPipeline, noteIdFor, reconcileFollowUps, canAutoSend, matchCalendar, titleSimilar } from '../pipeline';
+import { buildIcs, toIcsDateTime } from '../calendar-ics';
+import { enqueue, cancel, expedite, dueItems, prune, visibleItems, EMPTY_OUTBOX } from '../outbox';
+import { composeBody, replySubject, formatFrom } from '../mail-sender';
+import { extractSignature } from '../mail-intel';
+import { parseEmailAddress } from '../account-discovery';
+import { resolveFolder } from '../mailbox-actions';
+import type { FollowUp } from '../../../src/types/index';
 import type { PipelineDeps } from '../pipeline';
-import type { CandidateMail } from '../mail-intel';
+import type { CandidateMail, WaitingThread } from '../mail-intel';
 import { extractJson } from '../claude-runner';
 import { DEFAULT_SETTINGS } from '../../../src/types/index';
 import type { ButlerCase, AppSettings, MailNote } from '../../../src/types/index';
@@ -201,7 +208,7 @@ test('buildClassifyPrompt includes context and every case id', () => {
 });
 
 test('fallbackBrief is a sentence, not empty', () => {
-  const t = fallbackBrief({ today: '2026-09-05', p1: [{ subject: 'S', from: 'F', ask: 'A', deadline: null }], p2: [], counts: { cases: 1, noise: 2, spam: 3, drafts: 1, fyi: 0 } });
+  const t = fallbackBrief({ today: '2026-09-05', hour: 9, p1: [{ subject: 'S', from: 'F', ask: 'A', deadline: null }], p2: [], counts: { cases: 1, noise: 2, spam: 3, drafts: 1, fyi: 0 } });
   assert.ok(t.startsWith('おはようございます'));
   assert.ok(t.includes('S'));
 });
@@ -235,6 +242,7 @@ test('runButlerPipeline: spam grouped, noise excluded, AI cases judged, notes on
       const judgments = new Map(inputs.map((i) => [i.id, {
         id: i.id, category: i.subject.includes('日程') ? 'reply' as const : 'fyi' as const, priority: i.subject.includes('日程') ? 'P2' as const : 'P3' as const,
         ask: 'ask', summary: 'sum', deadline: i.subject.includes('日程') ? '2026-09-06' : null, suggestedAction: 'act', reason: 'why', needsDraft: i.subject.includes('日程'),
+        replyKind: i.subject.includes('日程') ? 'schedule' as const : 'other' as const, autoSendSafe: i.subject.includes('日程'), replyScope: 'sender' as const, decision: null, event: null,
       }]));
       return { judgments, aiCalls: 1, costUsd: 0.01, errors: [] };
     },
@@ -289,4 +297,293 @@ test('runButlerPipeline: disabled and not forced → empty digest without writes
   const d = await runButlerPipeline(deps);
   assert.equal(d.processedCount, 0);
   assert.equal(wrote, false);
+});
+
+
+// =====================================================================
+// v3 相棒
+// =====================================================================
+
+test('greetingFor / fallbackBrief follow the hour', () => {
+  assert.equal(greetingFor(8), 'おはようございます。');
+  assert.equal(greetingFor(15), 'お疲れさまです。');
+  const t15 = fallbackBrief({ today: '2026-10-07', hour: 15, p1: [], p2: [], counts: { cases: 0, noise: 3, spam: 0, drafts: 0, fyi: 0, tidied: 3, followUps: 2 } });
+  assert.ok(t15.startsWith('お疲れさまです。'));
+  assert.ok(t15.includes('片付け'));
+  assert.ok(t15.includes('返事待ちが2件'));
+});
+
+test('normalizeDecision validates question + options', () => {
+  assert.equal(normalizeDecision(null), null);
+  assert.equal(normalizeDecision({ question: '', options: ['a'] }), null);
+  assert.equal(normalizeDecision({ question: '出席しますか?', options: [] }), null);
+  assert.deepEqual(normalizeDecision({ question: '出席しますか?', options: ['出席', '欠席', '出席', ''] }), { question: '出席しますか?', options: ['出席', '欠席'] });
+});
+
+test('outbox: enqueue → due after delay, cancel only while scheduled, expedite moves sendAt to now', () => {
+  const now = new Date('2026-10-07T09:00:00Z');
+  const { store: s1, item } = enqueue(EMPTY_OUTBOX, { kind: 'reply', accountEmail: 'a@x', to: ['b@y'], cc: [], subject: 'Re: t', body: 'hi', label: 'b へ', delayMinutes: 5 }, now);
+  assert.equal(item.status, 'scheduled');
+  assert.equal(dueItems(s1, now).length, 0);
+  assert.equal(dueItems(s1, new Date(now.getTime() + 5 * 60_000)).length, 1);
+  const ex = expedite(s1, item.id, now);
+  assert.equal(dueItems(ex.store, now).length, 1);
+  const c1 = cancel(s1, item.id);
+  assert.equal(c1.item?.status, 'cancelled');
+  assert.ok(cancel(c1.store, item.id).error);   // cancelled → not cancellable again
+  // sent items older than a day are hidden; recent ones visible
+  const sent = { ...item, status: 'sent' as const, sentAt: new Date(now.getTime() - 2 * 86_400_000).toISOString() };
+  assert.equal(visibleItems({ version: 1, items: [sent] }, now).length, 0);
+  assert.equal(prune({ version: 1, items: [sent] }, new Date(now.getTime() + 20 * 86_400_000)).items.length, 0);
+});
+
+test('mail-sender: replySubject / composeBody / formatFrom', () => {
+  assert.equal(replySubject('日程の件'), 'Re: 日程の件');
+  assert.equal(replySubject('Re: 日程の件'), 'Re: 日程の件');
+  assert.equal(replySubject('RE[2]: 日程の件'), 'RE[2]: 日程の件');
+  const body = composeBody('有川さま\n\n重信です。', '====\n福井大学 重信\n====', { fromText: '有川 <a@mri.co.jp>', dateText: '2026/10/1 10:00', toText: 'lute@u-fukui.ac.jp', subject: '日程', body: '候補日を\nください' });
+  assert.ok(body.startsWith('有川さま\n\n重信です。\n\n====\n福井大学 重信\n====\n\n------ 元のメッセージ ------'));
+  assert.ok(body.endsWith('> 候補日を\n> ください'));
+  assert.equal(composeBody('x', '', null), 'x');
+  assert.equal(formatFrom('SHIGENOBU Ryuto', 'lute@u-fukui.ac.jp'), '"SHIGENOBU Ryuto" <lute@u-fukui.ac.jp>');
+  assert.equal(formatFrom('', 'lute@u-fukui.ac.jp'), 'lute@u-fukui.ac.jp');
+});
+
+test('extractSignature finds the ==== block and ignores quoted text', () => {
+  const raw = ['河合さま', '', '重信です。', 'よろしくお願い致します。', '', '============================================', '福井大学 学術研究院工学系部門', '重信 颯人', 'E-mail: lute@u-fukui.ac.jp', '============================================', '', '> 元のメッセージ', '> ...'].join('\n');
+  const sig = extractSignature(raw);
+  assert.ok(sig.startsWith('============================================\n福井大学'));
+  assert.ok(sig.endsWith('============================================'));
+  assert.ok(!sig.includes('よろしく'));
+  assert.equal(extractSignature('短い本文だけ'), '');
+});
+
+test('account-discovery: parseEmailAddress', () => {
+  assert.deepEqual(parseEmailAddress('"SHIGENOBU Ryuto" <lute@u-fukui.ac.jp>'), { name: 'SHIGENOBU Ryuto', address: 'lute@u-fukui.ac.jp' });
+  assert.deepEqual(parseEmailAddress('lute@G.u-fukui.ac.jp'), { name: '', address: 'lute@g.u-fukui.ac.jp' });
+});
+
+test('mailbox-actions: resolveFolder prefers special-use, then names', () => {
+  const folders = [
+    { path: 'INBOX', name: 'INBOX', delimiter: '/', flags: new Set<string>(), listed: true, subscribed: true },
+    { path: '[Gmail]/すべてのメール', name: 'すべてのメール', delimiter: '/', flags: new Set<string>(), listed: true, subscribed: true, specialUse: '\\All' },
+    { path: 'Archive', name: 'Archive', delimiter: '.', flags: new Set<string>(), listed: true, subscribed: true },
+  ] as unknown as Parameters<typeof resolveFolder>[0];
+  assert.equal(resolveFolder(folders, '\\All', ['Archive']), '[Gmail]/すべてのメール');
+  assert.equal(resolveFolder(folders, '\\Archive', ['Archive']), 'Archive');
+  assert.equal(resolveFolder(folders, '\\Trash', ['Trash']), null);
+});
+
+test('canAutoSend: only delegate + trusted + safe + drafted + no open decision', () => {
+  const base = {
+    id: 'a::conv-1', accountEmail: 'a', mailId: 1, mailIds: [1], subject: 's', from: 'x', fromAddress: 'x@u-fukui.ac.jp', fromName: 'x', receivedAt: '', addressedToMe: 'to', senderTier: 'internal',
+    threadCount: 1, myRepliesInThread: 0, lastFromMe: false, category: 'reply', priority: 'P2', ask: '', summary: '', deadline: null, suggestedAction: '', reason: '', needsDraft: true,
+    tags: [], status: 'open', aiSource: 'ai', createdAt: '', runAt: '', draft: 'ok', draftStatus: 'prepared', autoSendSafe: true, replyKind: 'ack', decision: null,
+  } as unknown as ButlerCase;
+  assert.equal(canAutoSend(base, 'delegate'), true);
+  assert.equal(canAutoSend(base, 'assist'), false);
+  assert.equal(canAutoSend({ ...base, senderTier: 'unknown' }, 'delegate'), false);
+  assert.equal(canAutoSend({ ...base, replyKind: 'decline' }, 'delegate'), false);
+  assert.equal(canAutoSend({ ...base, decision: { question: 'q', options: ['a'] } }, 'delegate'), false);
+  assert.equal(canAutoSend({ ...base, decision: { question: 'q', options: ['a'], answer: 'a' } }, 'delegate'), true);
+  assert.equal(canAutoSend({ ...base, draft: undefined }, 'delegate'), false);
+});
+
+test('reconcileFollowUps: opens judged threads, closes answered ones, keeps unknown for next time', () => {
+  const now = new Date('2026-10-07T00:00:00Z');
+  const w = (conv: string, days: number): WaitingThread & { accountEmail: string } => ({
+    accountEmail: 'a', conversationId: conv, mailId: 10, subject: `s-${conv}`, sentAt: new Date(now.getTime() - days * 86_400_000), to: [{ displayName: 'T', address: 't@x', type: AddressType.To }], cc: [], body: 'b', daysWaiting: days, threadCount: 2,
+  });
+  const prev: FollowUp[] = [
+    { id: 'a::conv-old', accountEmail: 'a', conversationId: 'old', mailId: 1, subject: 'old', to: 'T', toAddress: 't@x', sentAt: '', daysWaiting: 5, ask: '', summary: '', status: 'open', aiSource: 'ai', createdAt: '', updatedAt: '' },
+    { id: 'a::conv-keep', accountEmail: 'a', conversationId: 'keep', mailId: 2, subject: 'keep', to: 'T', toAddress: 't@x', sentAt: '', daysWaiting: 3, ask: '', summary: '', status: 'snoozed', snoozeUntil: '2026-10-06T00:00:00Z', aiSource: 'ai', createdAt: '', updatedAt: '' },
+  ];
+  const judgments = new Map([
+    ['a::conv-new', { id: 'a::conv-new', needsReply: true, ask: '候補日の回答', summary: 'T に日程', nudgeOk: true, urgency: 'soon' as const }],
+    ['a::conv-no', { id: 'a::conv-no', needsReply: false, ask: '', summary: 'お礼だけ', nudgeOk: false, urgency: 'later' as const }],
+  ]);
+  const r = reconcileFollowUps(prev, [w('keep', 6), w('new', 5), w('no', 5), w('unjudged', 7)], judgments, ['a'], now);
+  assert.deepEqual(r.opened.map((f) => f.id), ['a::conv-new']);
+  assert.deepEqual(r.closed.map((f) => f.id), ['a::conv-old']);          // もう待ちリストに無い = 返事が来た
+  const keep = r.list.find((f) => f.id === 'a::conv-keep')!;
+  assert.equal(keep.status, 'open');                                       // snooze 明け
+  assert.equal(keep.daysWaiting, 6);
+  assert.equal(r.list.find((f) => f.id === 'a::conv-no')?.status, 'closed');
+  assert.ok(!r.list.some((f) => f.id === 'a::conv-unjudged'));            // 判定待ちは次回
+});
+
+test('buildFollowUpPrompt lists every id', () => {
+  const p = buildFollowUpPrompt(ctx, [{ id: 'x::conv-1', subject: 's', toText: 'T <t@x>', tier: 'known', sentAt: '2026-10-01 10:00', daysWaiting: 6, threadCount: 3, body: 'b' }]);
+  assert.ok(p.includes('x::conv-1') && p.includes('6日前'));
+});
+
+test('runButlerPipeline v3: tidy archives noise, delegate schedules safe replies, follow-ups tracked', async () => {
+  const files = new Map<string, unknown>();
+  const notes = new Map<string, MailNote>();
+  const settings: AppSettings = { ...DEFAULT_SETTINGS, butlerEnabled: true, selectedAccounts: ['lute@u-fukui.ac.jp'], partnerMode: 'delegate', partnerAutoTidy: true, butlerMaxDraftsPerRun: 3 };
+  const mails: CandidateMail[] = [
+    mkMail({ id: 2, subject: 'Call for papers: Journal of X', from: { displayName: 'J', address: 'em@journal.com', type: AddressType.From } }),
+    mkMail({ id: 3, subject: '資料ありがとうございました', conversationId: 'conv-B', from: { displayName: '河合', address: 't-kawai@u-fukui.ac.jp', type: AddressType.From }, to: [{ displayName: '', address: 'lute@u-fukui.ac.jp', type: AddressType.To }] }),
+    mkMail({ id: 5, subject: '審査の可否について', conversationId: 'conv-C', from: { displayName: '千住', address: 'senju@u-ryukyu.ac.jp', type: AddressType.From }, to: [{ displayName: '', address: 'lute@u-fukui.ac.jp', type: AddressType.To }] }),
+  ];
+  const tidied: number[] = [];
+  const scheduled: string[] = [];
+  const journal: string[] = [];
+  const deps: PipelineDeps = {
+    loadSettings: () => settings,
+    loadRules: () => EMPTY_RULES,
+    buildContext: () => ctx,
+    getCandidates: () => mails,
+    getSenderStats: () => new Map([['senju@u-ryukyu.ac.jp', { received: 5, replied: 3, sentTo: 2 }]]),
+    getThread: (_a, conv) => ({ conversationId: conv, count: 1, myReplies: 0, lastFromMe: false, lastAt: new Date(), messages: [] }),
+    getBodies: (_a, ids) => new Map(ids.map((i) => [i, `body ${i}`])),
+    getExemplars: () => [],
+    classify: async (_c, inputs) => ({
+      judgments: new Map(inputs.map((i) => [i.id, i.subject.includes('ありがとう')
+        ? { id: i.id, category: 'reply' as const, priority: 'P3' as const, ask: 'お礼に返事', summary: 's', deadline: null, suggestedAction: '返信', reason: 'r', needsDraft: true, replyKind: 'thanks' as const, autoSendSafe: true, replyScope: 'sender' as const, decision: null, event: null }
+        : { id: i.id, category: 'reply' as const, priority: 'P2' as const, ask: '可否を回答', summary: 's', deadline: null, suggestedAction: '返信', reason: 'r', needsDraft: true, replyKind: 'accept' as const, autoSendSafe: false, replyScope: 'sender' as const, decision: { question: '副査を引き受けますか?', options: ['引き受ける', '辞退する'] }, event: { title: '予備審査', start: '2026-11-15T10:00', end: null, allDay: false, kind: 'meeting' as const } },
+      ])),
+      aiCalls: 1, costUsd: 0, errors: [],
+    }),
+    draft: async () => ({ ok: true, draft: '河合さま\n\n重信です。', costUsd: 0 }),
+    brief: async (b) => ({ text: fallbackBrief(b), costUsd: 0, ai: false }),
+    moveToQuarantine: async () => ({ success: false }),
+    hasImapCredentials: () => true,
+    getNote: (id) => notes.get(id) ?? null,
+    saveNote: (n) => { notes.set(n.id, n); },
+    butlerStatePath: 'state', digestPath: 'digest',
+    readJson: <T,>(p: string) => (files.get(p) as T) ?? null,
+    writeJson: (p, d) => { files.set(p, JSON.parse(JSON.stringify(d))); },
+    now: () => new Date('2026-10-07T00:00:00Z'),
+    canTidy: () => true,
+    tidy: async (_a, ids) => { tidied.push(...ids); return { done: ids, archiveFolder: 'Archive' }; },
+    canSend: () => true,
+    enqueueSend: async (c) => { scheduled.push(c.id); return `ob-${c.mailId}`; },
+    getWaitingThreads: () => [{ conversationId: 'W1', mailId: 77, subject: '候補日のお願い', sentAt: new Date('2026-10-01T00:00:00Z'), to: [{ displayName: '有川', address: 's_arikawa@mri.co.jp', type: AddressType.To }], cc: [], body: '候補日をお知らせください', daysWaiting: 6, threadCount: 1 }],
+    judgeFollowUps: async (_c, inputs) => ({ judgments: new Map(inputs.map((i) => [i.id, { id: i.id, needsReply: true, ask: '候補日の回答', summary: '有川さんに日程', nudgeOk: true, urgency: 'soon' as const }])), aiCalls: 1, costUsd: 0, errors: [] }),
+    followUpsPath: 'followups',
+    journal: (e) => { journal.push(`${e.kind}:${e.text}`); },
+  };
+  const digest = await runButlerPipeline(deps, { force: true });
+  // 片付け
+  assert.deepEqual(tidied, [2]);
+  const tg = digest.groups!.find((g) => g.kind === 'tidied')!;
+  assert.equal(tg.items.length, 1);
+  assert.equal(tg.archiveFolder, 'Archive');
+  assert.equal(digest.stats?.tidied, 1);
+  // 任せる: お礼(thanks, vip, safe) は送信予定へ。決定が要る案件は下書きも作らず問いだけ
+  const kawai = digest.cases!.find((c) => c.fromAddress === 't-kawai@u-fukui.ac.jp')!;
+  assert.equal(kawai.status, 'scheduled');
+  assert.equal(kawai.outboxId, 'ob-3');
+  assert.deepEqual(scheduled, [kawai.id]);
+  const senju = digest.cases!.find((c) => c.fromAddress === 'senju@u-ryukyu.ac.jp')!;
+  assert.equal(senju.status, 'open');
+  assert.equal(senju.draft, undefined);
+  assert.equal(senju.decision?.question, '副査を引き受けますか?');
+  assert.equal(digest.stats?.decisions, 1);
+  assert.equal(digest.stats?.scheduled, 1);
+  // 返事待ち
+  const fus = files.get('followups') as FollowUp[];
+  assert.equal(fus.length, 1);
+  assert.equal(fus[0].status, 'open');
+  assert.equal(fus[0].ask, '候補日の回答');
+  assert.equal(digest.stats?.followUps, 1);
+  assert.equal(digest.mode, 'delegate');
+  assert.ok(journal.some((j) => j.startsWith('archived:')) && journal.some((j) => j.startsWith('scheduled:')) && journal.some((j) => j.startsWith('run:')));
+  // 2回目: 送信予定中の案件は引き継がれ、返事が来た待ちは閉じる
+  const deps2: PipelineDeps = { ...deps, getCandidates: () => [], getWaitingThreads: () => [] };
+  const digest2 = await runButlerPipeline(deps2, { force: true });
+  assert.equal(digest2.cases!.find((c) => c.id === kawai.id)?.status, 'scheduled');
+  assert.equal((files.get('followups') as FollowUp[])[0].status, 'closed');
+});
+
+test('runButlerPipeline v3: observe mode never tidies nor schedules', async () => {
+  const files = new Map<string, unknown>();
+  let tidyCalled = false;
+  const settings: AppSettings = { ...DEFAULT_SETTINGS, butlerEnabled: true, selectedAccounts: ['lute@u-fukui.ac.jp'], partnerMode: 'observe' };
+  const deps: PipelineDeps = {
+    loadSettings: () => settings, loadRules: () => EMPTY_RULES, buildContext: () => ctx,
+    getCandidates: () => [mkMail({ id: 2, subject: 'Call for papers: Journal of X', from: { displayName: 'J', address: 'em@journal.com', type: AddressType.From } })],
+    getSenderStats: () => new Map(), getThread: () => ({ conversationId: '', count: 0, myReplies: 0, lastFromMe: false, lastAt: null, messages: [] }),
+    getBodies: () => new Map(), getExemplars: () => [],
+    classify: async () => ({ judgments: new Map(), aiCalls: 0, costUsd: 0, errors: [] }),
+    draft: async () => ({ ok: false, draft: '', costUsd: 0 }), brief: async (b) => ({ text: fallbackBrief(b), costUsd: 0, ai: false }),
+    moveToQuarantine: async () => ({ success: false }), hasImapCredentials: () => true, getNote: () => null, saveNote: () => undefined,
+    butlerStatePath: 'state', digestPath: 'digest', readJson: <T,>(p: string) => (files.get(p) as T) ?? null, writeJson: (p, d) => { files.set(p, d); },
+    canTidy: () => true, tidy: async (_a, ids) => { tidyCalled = true; return { done: ids, archiveFolder: 'Archive' }; },
+  };
+  const d = await runButlerPipeline(deps, { force: true });
+  assert.equal(tidyCalled, false);
+  assert.equal(d.groups!.find((g) => g.kind === 'noise_list')?.items.length, 1);
+  assert.equal(d.mode, 'observe');
+});
+
+
+// ---------- v3.1 カレンダー ----------
+test('normalizeEvent: validates date, fills allDay, drops past', () => {
+  assert.equal(normalizeEvent(null, '2026-10-07'), null);
+  assert.deepEqual(normalizeEvent({ title: '役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, kind: 'meeting', location: '金沢' }, '2026-10-07'),
+    { title: '役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, location: '金沢', kind: 'meeting' });
+  assert.deepEqual(normalizeEvent({ title: '提出期限', start: '2026-10-8', allDay: true, kind: 'deadline' }, '2026-10-07'), { title: '提出期限', start: '2026-10-08', end: null, allDay: true, location: undefined, kind: 'deadline' });
+  assert.equal(normalizeEvent({ title: '過去', start: '2026-09-01', allDay: true, kind: 'event' }, '2026-10-07'), null);
+  assert.equal(normalizeEvent({ title: 'x', start: '来週', allDay: true, kind: 'event' }, '2026-10-07'), null);
+});
+
+test('titleSimilar / matchCalendar: same day + similar title → registered', () => {
+  assert.equal(titleSimilar('電気学会北陸支部役員会', '【電気学会】北陸支部 役員会'), true);
+  assert.equal(titleSimilar('エナリス定例', '福井大学様定例(エナリス)'), true);
+  assert.equal(titleSimilar('役員会', '歯医者'), false);
+  const events = [
+    { id: 1, summary: '北陸支部役員会', description: '', location: '', start: new Date('2026-10-29T17:00:00'), end: new Date('2026-10-29T19:00:00'), status: 0, type: 0, organizerName: '', organizerAddress: '', accountEmail: 'a', isAllDay: false },
+    { id: 2, summary: '出張', description: '', location: '', start: new Date('2026-11-15T00:00:00'), end: new Date('2026-11-16T00:00:00'), status: 0, type: 0, organizerName: '', organizerAddress: '', accountEmail: 'a', isAllDay: true },
+  ];
+  assert.deepEqual(matchCalendar({ title: '電気学会北陸支部役員会', start: '2026-10-29T17:00', allDay: false, kind: 'meeting' }, events), { status: 'registered', match: '北陸支部役員会' });
+  assert.equal(matchCalendar({ title: '電気学会北陸支部役員会', start: '2026-10-30T17:00', allDay: false, kind: 'meeting' }, events).status, 'missing');
+  assert.equal(matchCalendar({ title: '予備審査', start: '2026-11-15', allDay: true, kind: 'meeting' }, events).status, 'missing');
+  // 同時刻で言い方が違う同じ予定(共通語あり) → 登録済み。共通語なし → 未登録
+  const tepco = [{ id: 3, summary: '東電金本さんリクルート', description: '', location: '', start: new Date('2026-10-20T16:00:00'), end: new Date('2026-10-20T17:00:00'), status: 0, type: 0, organizerName: '', organizerAddress: '', accountEmail: 'a', isAllDay: false }];
+  assert.equal(matchCalendar({ title: '東電PG 2028卒向け説明会', start: '2026-10-20T16:00', allDay: false, kind: 'event' }, tepco).status, 'registered');
+  assert.equal(matchCalendar({ title: '最適化講義', start: '2026-10-20T16:00', allDay: false, kind: 'event' }, tepco).status, 'missing');
+});
+
+test('buildIcs: timed and all-day events', () => {
+  const timed = buildIcs({ title: '役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, kind: 'meeting', location: '金沢, 会議室' }, new Date('2026-10-07T00:00:00Z'));
+  assert.ok(timed.includes('DTSTART;TZID=Asia/Tokyo:20261029T170000'));
+  assert.ok(timed.includes('DTEND;TZID=Asia/Tokyo:20261029T190000'));
+  assert.ok(timed.includes('LOCATION:金沢\\, 会議室'));
+  const allDay = buildIcs({ title: '締切', start: '2026-10-08', allDay: true, kind: 'deadline' });
+  assert.ok(allDay.includes('DTSTART;VALUE=DATE:20261008'));
+  assert.ok(allDay.includes('DTEND;VALUE=DATE:20261009'));
+  const noEnd = buildIcs({ title: 'x', start: '2026-10-08T23:30', allDay: false, kind: 'other' });
+  assert.ok(noEnd.includes('DTEND;TZID=Asia/Tokyo:20261009T003000'));
+  assert.deepEqual(toIcsDateTime('2026-10-08'), { value: '20261008', allDay: true });
+});
+
+test('runButlerPipeline: calendar cross-check marks missing events and counts them', async () => {
+  const files = new Map<string, unknown>();
+  const settings: AppSettings = { ...DEFAULT_SETTINGS, butlerEnabled: true, selectedAccounts: ['lute@u-fukui.ac.jp'] };
+  const deps: PipelineDeps = {
+    loadSettings: () => settings, loadRules: () => EMPTY_RULES, buildContext: () => ctx,
+    getCandidates: () => [mkMail({ id: 9, subject: '役員会のご案内', conversationId: 'conv-E', from: { displayName: '山本', address: 'y@ieej.or.jp', type: AddressType.From }, to: [{ displayName: '', address: 'lute@u-fukui.ac.jp', type: AddressType.To }] })],
+    getSenderStats: () => new Map([['y@ieej.or.jp', { received: 3, replied: 2, sentTo: 1 }]]),
+    getThread: () => ({ conversationId: 'conv-E', count: 1, myReplies: 0, lastFromMe: false, lastAt: null, messages: [] }),
+    getBodies: () => new Map(), getExemplars: () => [],
+    classify: async (_c, inputs) => ({ judgments: new Map(inputs.map((i) => [i.id, { id: i.id, category: 'action' as const, priority: 'P2' as const, ask: '出欠回答', summary: 's', deadline: '2026-10-09', suggestedAction: '出欠を登録', reason: 'r', needsDraft: false, replyKind: 'other' as const, autoSendSafe: false, replyScope: 'sender' as const, decision: null, event: { title: '北陸支部役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, kind: 'meeting' as const } }])), aiCalls: 1, costUsd: 0, errors: [] }),
+    draft: async () => ({ ok: false, draft: '', costUsd: 0 }), brief: async (b) => ({ text: fallbackBrief(b), costUsd: 0, ai: false }),
+    moveToQuarantine: async () => ({ success: false }), hasImapCredentials: () => false, getNote: () => null, saveNote: () => undefined,
+    butlerStatePath: 'state', digestPath: 'digest', readJson: <T,>(p: string) => (files.get(p) as T) ?? null, writeJson: (p, d) => { files.set(p, JSON.parse(JSON.stringify(d))); },
+    now: () => new Date('2026-10-07T00:00:00Z'),
+    getCalendarEvents: () => [{ id: 1, summary: '歯医者', description: '', location: '', start: new Date('2026-10-29T17:00:00'), end: new Date('2026-10-29T18:00:00'), status: 0, type: 0, organizerName: '', organizerAddress: '', accountEmail: 'a', isAllDay: false }],
+  };
+  const d = await runButlerPipeline(deps, { force: true });
+  const c = d.cases![0];
+  assert.equal(c.event?.title, '北陸支部役員会');
+  assert.equal(c.calendarStatus, 'missing');
+  assert.equal(d.stats?.calendarMissing, 1);
+  assert.ok(d.brief?.includes('カレンダーに入っていない予定が1件'));
+  // 登録されたら次回は registered
+  const deps2: PipelineDeps = { ...deps, getCandidates: () => [], getCalendarEvents: () => [{ id: 2, summary: '電気学会 北陸支部役員会', description: '', location: '', start: new Date('2026-10-29T17:00:00'), end: new Date('2026-10-29T19:00:00'), status: 0, type: 0, organizerName: '', organizerAddress: '', accountEmail: 'a', isAllDay: false }] };
+  const d2 = await runButlerPipeline(deps2, { force: true });
+  assert.equal(d2.cases![0].calendarStatus, 'registered');
+  assert.equal(d2.stats?.calendarMissing, 0);
 });

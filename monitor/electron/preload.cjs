@@ -190,6 +190,30 @@ const api = {
     ipcRenderer.on('butlerProgress', handler);
     return () => ipcRenderer.removeListener('butlerProgress', handler);
   },
+  // 相棒 v3
+  partnerGetState: () => ipcRenderer.invoke('partner:getState'),
+  partnerRunNow: () => ipcRenderer.invoke('partner:runNow'),
+  partnerSend: (params) => ipcRenderer.invoke('partner:send', params),
+  partnerCancelSend: (params) => ipcRenderer.invoke('partner:cancelSend', params),
+  partnerSendNow: (params) => ipcRenderer.invoke('partner:sendNow', params),
+  partnerAnswerDecision: (params) => ipcRenderer.invoke('partner:answerDecision', params),
+  partnerSaveDraft: (params) => ipcRenderer.invoke('partner:saveDraft', params),
+  partnerFollowUpAction: (params) => ipcRenderer.invoke('partner:followUpAction', params),
+  partnerUndoTidy: (params) => ipcRenderer.invoke('partner:undoTidy', params),
+  partnerDiscoverAccounts: () => ipcRenderer.invoke('partner:discoverAccounts'),
+  partnerTestConnection: (params) => ipcRenderer.invoke('partner:testConnection', params),
+  partnerGetProfile: () => ipcRenderer.invoke('partner:getProfile'),
+  partnerSaveProfile: (content) => ipcRenderer.invoke('partner:saveProfile', content),
+  partnerHandoffPrepare: (params) => ipcRenderer.invoke('partner:handoffPrepare', params),
+  partnerHandoffOpen: (params) => ipcRenderer.invoke('partner:handoffOpen', params),
+  partnerPickFolder: (params) => ipcRenderer.invoke('partner:pickFolder', params),
+  partnerDraftToEmClient: (params) => ipcRenderer.invoke('partner:draftToEmClient', params),
+  partnerAddToCalendar: (params) => ipcRenderer.invoke('partner:addToCalendar', params),
+  onPartnerState: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on('partner:state', handler);
+    return () => ipcRenderer.removeListener('partner:state', handler);
+  },
 };
 
 contextBridge.exposeInMainWorld('electronAPI', api);

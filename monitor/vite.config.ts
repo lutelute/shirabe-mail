@@ -14,7 +14,7 @@ export default defineConfig({
           build: {
             outDir: 'dist-electron',
             rollupOptions: {
-              external: ['better-sqlite3', '@anthropic-ai/sdk', '@anthropic-ai/claude-agent-sdk', 'node-pty', 'imapflow'],
+              external: ['better-sqlite3', '@anthropic-ai/sdk', '@anthropic-ai/claude-agent-sdk', 'node-pty', 'imapflow', 'nodemailer', 'nodemailer/lib/mail-composer/index.js'],
             },
           },
         },

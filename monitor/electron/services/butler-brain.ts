@@ -18,6 +18,9 @@ import type {
   ButlerPriority,
   SenderTier,
   SenderStats,
+  ReplyKind,
+  CaseDecision,
+  CaseEvent,
 } from '../../src/types/index';
 
 // ---------- 判断コンテキスト ----------
@@ -36,6 +39,24 @@ export interface JudgmentContext {
 export interface JudgmentSources {
   homeDir: string;
   userDataDir: string;
+  referencesDir?: string;   // 設定で指定(空なら自動検出)
+}
+
+/** 連絡先・判断ルールの置き場所の候補(シンボリックリンク切れに備えて複数見る) */
+export function resolveReferencesDir(src: JudgmentSources): string | null {
+  const candidates = [
+    src.referencesDir,
+    path.join(src.userDataDir, 'references'),
+    path.join(src.homeDir, '.claude', 'skills', 'shirabe', 'references'),
+    path.join(src.homeDir, 'dev', 'github', 'claude-skills', 'skills', 'shirabe', 'references'),
+    path.join(src.homeDir, 'Documents', 'GitHub', 'claude-skills', 'skills', 'shirabe', 'references'),
+  ].filter((p): p is string => !!p);
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isDirectory()) return p;
+    } catch { /* broken symlink etc. */ }
+  }
+  return null;
 }
 
 // 先生の人物像(既定)。userData/butler-profile.md があればそちらを優先。
@@ -73,16 +94,18 @@ const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 
 export function buildJudgmentContext(src: JudgmentSources, rules: ButlerRules, myAddresses: string[]): JudgmentContext {
   const sources: string[] = [];
-  const refDir = path.join(src.homeDir, '.claude', 'skills', 'shirabe', 'references');
+  const refDir = resolveReferencesDir(src);
 
   const profilePath = path.join(src.userDataDir, 'butler-profile.md');
   const profile = readIfExists(profilePath, 4000);
   if (profile) sources.push('butler-profile.md');
 
-  const decisionRules = readIfExists(path.join(refDir, 'decision-rules.md'), 5000);
+  const decisionRules = refDir ? readIfExists(path.join(refDir, 'decision-rules.md'), 5000) : null;
   if (decisionRules) sources.push('decision-rules.md');
-  const contacts = readIfExists(path.join(refDir, 'contacts.md'), 5000);
+  const contacts = refDir ? readIfExists(path.join(refDir, 'contacts.md'), 5000) : null;
   if (contacts) sources.push('contacts.md');
+  const preferences = refDir ? readIfExists(path.join(refDir, 'preferences.md'), 3000) : null;
+  if (preferences) sources.push('preferences.md');
 
   const contactAddresses = new Set<string>();
   for (const m of (contacts ?? '').matchAll(EMAIL_RE)) contactAddresses.add(m[0].toLowerCase());
@@ -91,7 +114,7 @@ export function buildJudgmentContext(src: JudgmentSources, rules: ButlerRules, m
 
   return {
     today: localDateString(),
-    profile: profile ?? DEFAULT_PROFILE,
+    profile: (profile ?? DEFAULT_PROFILE) + (preferences ? `\n\n## 先生の流儀(preferences)\n${preferences}` : ''),
     decisionRules: decisionRules ?? '',
     contacts: contacts ?? '',
     contactAddresses,
@@ -216,6 +239,12 @@ export interface CaseJudgment {
   reason: string;
   needsDraft: boolean;
   draftHint?: string;
+  // v3
+  replyKind: ReplyKind;
+  autoSendSafe: boolean;
+  replyScope: 'sender' | 'all';
+  decision: CaseDecision | null;
+  event: CaseEvent | null;
 }
 
 const CLASSIFY_SCHEMA = {
@@ -236,8 +265,31 @@ const CLASSIFY_SCHEMA = {
           reason: { type: 'string' },
           needsDraft: { type: 'boolean' },
           draftHint: { type: 'string' },
+          replyKind: { type: 'string', enum: ['ack', 'thanks', 'schedule', 'answer', 'accept', 'decline', 'other'] },
+          autoSendSafe: { type: 'boolean' },
+          replyScope: { type: 'string', enum: ['sender', 'all'] },
+          decision: {
+            type: ['object', 'null'],
+            properties: {
+              question: { type: 'string' },
+              options: { type: 'array', items: { type: 'string' } },
+            },
+            required: ['question', 'options'],
+          },
+          event: {
+            type: ['object', 'null'],
+            properties: {
+              title: { type: 'string' },
+              start: { type: 'string' },
+              end: { type: ['string', 'null'] },
+              allDay: { type: 'boolean' },
+              location: { type: 'string' },
+              kind: { type: 'string', enum: ['meeting', 'deadline', 'event', 'other'] },
+            },
+            required: ['title', 'start', 'allDay', 'kind'],
+          },
         },
-        required: ['id', 'category', 'priority', 'ask', 'summary', 'deadline', 'suggestedAction', 'reason', 'needsDraft'],
+        required: ['id', 'category', 'priority', 'ask', 'summary', 'deadline', 'suggestedAction', 'reason', 'needsDraft', 'replyKind', 'autoSendSafe', 'replyScope', 'decision', 'event'],
       },
     },
   },
@@ -259,6 +311,11 @@ export const SYSTEM_CLASSIFY = `あなたは福井大学 重信颯人先生の�
 10. 面識のない海外ジャーナル/会議からの投稿・査読・登壇・編集委員の勧誘、商用セミナー宣伝は noise。
 11. summary は 2 行以内。相手が誰で、何の案件で、今どういう状態かを書く。
 12. suggestedAction は短い動詞句: 「返信する」「候補日を回答」「フォームに回答」「書類を提出」「支払い手続き」「出欠を登録」「学生に返事」「読むだけ」「無視でよい」など。
+13. replyKind: 返信の種類。ack = 受領・了解の返事 / thanks = お礼 / schedule = 日程の回答・確定 / answer = 質問への回答 / accept = 受諾 / decline = 辞退 / other。reply 以外は other。
+14. decision: 先生本人が決めないと返事が書けない事項があれば {question, options} を1つだけ。question は「〜しますか?」の1文、options は2〜4個の短い選択肢(例: ["出席する","欠席する","候補日を出す"])。自由記述が要るなら options に「自分で書く」を含める。決めることが無ければ null。needsDraft が true でも decision があれば下書きは答えの後に作る。
+15. autoSendSafe: 先生の判断なしに相棒が送っても安全なら true。条件: category が reply、decision が null、replyKind が ack / thanks / schedule(既に確定した日程の了解)のどれか、相手が常連・学内・面識あり、そして金銭・契約・評価・採否・学生の進路や成績・謝罪・対外的な約束・初めての相手を含まない。少しでも迷えば false。
+16. replyScope: 元メールに自分以外の宛先(To/Cc)が複数いて全員が経緯を共有すべきなら all、そうでなければ sender。学内の事務連絡・複数人での日程調整は all が多い。
+17. event: 先生が出る(または押さえるべき)会議・打合せ・行事・審査・締切の日時が本文に具体的に書かれていれば1つだけ。title は短く(「北陸支部役員会」「エナリス定例」)、start は YYYY-MM-DDTHH:MM(時刻不明・終日は YYYY-MM-DD で allDay true)、年は今日の日付から補う。end は分かれば。kind は meeting / deadline(提出・回答期限) / event(講演・行事) / other。候補日の列挙・未確定の調整中・過去の日付は null。
 必ず全案件を id ごとに返す。`;
 
 function statsText(s?: SenderStats): string {
@@ -307,6 +364,39 @@ export interface ClassifyOutcome {
 
 const VALID_CATEGORY = new Set(['reply', 'action', 'fyi', 'noise', 'spam']);
 const VALID_PRIORITY = new Set(['P1', 'P2', 'P3', 'P4']);
+const VALID_REPLY_KIND = new Set(['ack', 'thanks', 'schedule', 'answer', 'accept', 'decline', 'other']);
+
+/** AI の event を検証。日付が読めない・過去(昨日より前)なら null */
+export function normalizeEvent(raw: unknown, today: string): CaseEvent | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const e = raw as Partial<CaseEvent>;
+  const title = String(e.title ?? '').trim();
+  const m = String(e.start ?? '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/);
+  if (!title || !m) return null;
+  const day = `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+  const yesterday = new Date(`${today}T00:00:00`); yesterday.setDate(yesterday.getDate() - 1);
+  if (new Date(`${day}T00:00:00`).getTime() < yesterday.getTime()) return null;
+  const allDay = !!e.allDay || !m[4];
+  const start = allDay ? day : `${day}T${m[4].padStart(2, '0')}:${m[5]}`;
+  let end: string | null = null;
+  const me = String(e.end ?? '').trim().match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ](\d{1,2}):(\d{2}))?/);
+  if (me) {
+    const eday = `${me[1]}-${me[2].padStart(2, '0')}-${me[3].padStart(2, '0')}`;
+    end = allDay || !me[4] ? eday : `${eday}T${me[4].padStart(2, '0')}:${me[5]}`;
+  }
+  const kind = (['meeting', 'deadline', 'event', 'other'] as const).includes(e.kind as 'meeting') ? (e.kind as CaseEvent['kind']) : 'other';
+  return { title, start, end, allDay, location: e.location ? String(e.location).trim() : undefined, kind };
+}
+
+/** AI の decision を検証(問いと 1〜5 個の選択肢が揃っていなければ null) */
+export function normalizeDecision(raw: unknown): CaseDecision | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const d = raw as { question?: unknown; options?: unknown };
+  const question = String(d.question ?? '').trim();
+  const options = Array.isArray(d.options) ? d.options.map((o) => String(o ?? '').trim()).filter(Boolean).slice(0, 5) : [];
+  if (!question || options.length === 0) return null;
+  return { question, options: Array.from(new Set(options)) };
+}
 
 export function normalizeDeadline(raw: string | null | undefined, today: string): string | null {
   if (!raw) return null;
@@ -354,6 +444,11 @@ export async function classifyCases(
         reason: String(j.reason ?? '').trim(),
         needsDraft: !!j.needsDraft,
         draftHint: j.draftHint ? String(j.draftHint).trim() : undefined,
+        replyKind: (VALID_REPLY_KIND.has(String(j.replyKind)) ? j.replyKind : 'other') as ReplyKind,
+        autoSendSafe: !!j.autoSendSafe && j.category === 'reply' && !normalizeDecision(j.decision),
+        replyScope: j.replyScope === 'all' ? 'all' : 'sender',
+        decision: normalizeDecision(j.decision),
+        event: normalizeEvent(j.event, ctx.today),
       });
     }
   };
@@ -423,6 +518,8 @@ export interface DraftParams {
   draftHint?: string;
   instruction?: string;
   existingDraft?: string;
+  decisionQuestion?: string;   // 先生に聞いた問い
+  decisionAnswer?: string;     // 先生の答え(これを本文に反映する)
 }
 
 export function buildDraftPrompt(ctx: JudgmentContext, p: DraftParams): string {
@@ -438,6 +535,11 @@ export function buildDraftPrompt(ctx: JudgmentContext, p: DraftParams): string {
   parts.push(`相手: ${p.fromName ? `${p.fromName} <${p.fromAddress}>` : p.fromAddress}`);
   parts.push(`先生がすべきこと: ${p.ask || '(未指定)'}`);
   if (p.draftHint) parts.push(`下書きの方針メモ: ${p.draftHint}`);
+  if (p.decisionAnswer) {
+    parts.push(`\n## 先生の決定(必ず本文に反映し、この点は【 】で空欄にしない)`);
+    if (p.decisionQuestion) parts.push(`問い: ${p.decisionQuestion}`);
+    parts.push(`答え: ${p.decisionAnswer}`);
+  }
   parts.push('\n## スレッド(古い順)');
   for (const m of p.thread) {
     const d = m.date instanceof Date ? m.date : new Date(m.date);
@@ -475,39 +577,61 @@ export async function draftReply(
 
 // ---------- 朝の申し送り ----------
 
-export const SYSTEM_BRIEF = `あなたは重信先生の秘書「調(しらべ)」。朝一番に先生へ渡す申し送りを書く。
-- 「おはようございます。」で始め、2〜4文・300字以内。文章で(箇条書き禁止)。
-- 順番: 今日動くべきこと(相手と案件名を具体的に) → 今週の期限 → 用意した下書き・除外した件数。
+export const SYSTEM_BRIEF = `あなたは重信先生の相棒「調(しらべ)」。先生が画面を開いた最初に読む申し送りを書く。
+- 時間帯に合った挨拶(朝=おはようございます / 昼・午後=お疲れさまです / 夜=お疲れさまです)で始め、2〜4文・300字以内。文章で(箇条書き禁止)。
+- 順番: 今日動くべきこと(相手と案件名を具体的に) → 決めてほしいこと(件数と一番急ぐもの) → 今週の期限 → 任せた送信・片付けた件数 → 返事待ち。
 - 今日動く案件が無ければ「今日急ぐものはありません。」と一言で済ませ、水増ししない。
-- 秘書である自分が「段取りを進める」「指示をください」などと約束・要求しない。先生への簡潔な報告だけ。
+- 自分が「段取りを進める」「指示をください」などと約束・要求しない。先生への簡潔な報告だけ。
 - 数字と固有名詞を使う。抽象的な励ましや過剰な敬語の重ね(〜でございます等)は書かない。`;
 
 export interface BriefInput {
   today: string;
+  hour?: number;
   p1: Array<{ subject: string; from: string; ask: string; deadline: string | null }>;
   p2: Array<{ subject: string; from: string; ask: string; deadline: string | null }>;
-  counts: { cases: number; noise: number; spam: number; drafts: number; fyi: number };
+  decisions?: Array<{ subject: string; from: string; question: string }>;
+  counts: { cases: number; noise: number; spam: number; drafts: number; fyi: number; tidied?: number; scheduled?: number; followUps?: number; decisions?: number; calendarMissing?: number };
 }
 
 export function buildBriefPrompt(b: BriefInput): string {
   const fmt = (x: { subject: string; from: string; ask: string; deadline: string | null }) =>
     `- ${x.from}「${x.subject}」: ${x.ask}${x.deadline ? `(期限 ${x.deadline})` : ''}`;
+  const c = b.counts;
+  const extras: string[] = [];
+  if (c.tidied) extras.push(`一斉配信${c.tidied}件を既読にしてアーカイブ`);
+  else if (c.noise) extras.push(`ノイズ${c.noise}件を除外`);
+  if (c.spam) extras.push(`迷惑メール${c.spam}件`);
+  if (c.scheduled) extras.push(`定型返信${c.scheduled}通を送信予定に(取消可)`);
+  if (c.drafts) extras.push(`返信下書き${c.drafts}通`);
+  if (c.followUps) extras.push(`返事待ち${c.followUps}件`);
+  if (c.calendarMissing) extras.push(`カレンダー未登録の予定${c.calendarMissing}件(要登録)`);
   return [
-    `今日: ${b.today}`,
+    `今日: ${b.today}${b.hour !== undefined ? ` ${b.hour}時` : ''}`,
     `今日動く(P1) ${b.p1.length}件:`,
     ...b.p1.map(fmt),
+    `決めてほしいこと ${(b.decisions ?? []).length}件:`,
+    ...(b.decisions ?? []).map((d) => `- ${d.from}「${d.subject}」: ${d.question}`),
     `今週中(P2) ${b.p2.length}件:`,
     ...b.p2.map(fmt),
-    `その他: 案件${b.counts.cases}件、参考のみ${b.counts.fyi}件、ノイズ除外${b.counts.noise}件、迷惑メール${b.counts.spam}件、返信下書き${b.counts.drafts}通を用意。`,
+    `その他: 案件${c.cases}件、参考のみ${c.fyi}件。${extras.join('、')}。`,
   ].join('\n');
+}
+
+export function greetingFor(hour: number): string {
+  if (hour >= 4 && hour < 11) return 'おはようございます。';
+  return 'お疲れさまです。';
 }
 
 export function fallbackBrief(b: BriefInput): string {
   const first = b.p1[0];
   const p1s = b.p1.length === 0 ? '今日中に動く案件はありません。' : `今日は${b.p1.length}件動けば十分です。まず${first.from}の「${first.subject}」(${first.ask})から。`;
+  const dn = (b.decisions ?? []).length;
+  const ds = dn > 0 ? `決めてほしいことが${dn}件あります。` : '';
   const p2s = b.p2.length > 0 ? `今週中の案件が${b.p2.length}件あります。` : '';
-  const rest = `ノイズ${b.counts.noise}件と迷惑メール${b.counts.spam}件は除外し、返信下書きを${b.counts.drafts}通用意しました。`;
-  return `おはようございます。${p1s}${p2s}${rest}`;
+  const c = b.counts;
+  const tidy = c.tidied ? `一斉配信${c.tidied}件は片付け、` : c.noise ? `ノイズ${c.noise}件は除外し、` : '';
+  const rest = `${tidy}返信下書きを${c.drafts}通用意しました。${c.followUps ? `返事待ちが${c.followUps}件あります。` : ''}${c.calendarMissing ? `カレンダーに入っていない予定が${c.calendarMissing}件あります。` : ''}`;
+  return `${greetingFor(b.hour ?? new Date().getHours())}${p1s}${ds}${p2s}${rest}`;
 }
 
 export async function writeBrief(runner: ClaudeRunner, b: BriefInput, model: string): Promise<{ text: string; costUsd: number; ai: boolean }> {
@@ -520,4 +644,288 @@ export async function writeBrief(runner: ClaudeRunner, b: BriefInput, model: str
   });
   if (res.ok && res.text.trim()) return { text: res.text.trim(), costUsd: res.costUsd, ai: true };
   return { text: fallbackBrief(b), costUsd: res.costUsd, ai: false };
+}
+
+
+// =====================================================================
+// v3 相棒: 返事待ちの判定 / 催促文
+// =====================================================================
+
+export interface FollowUpInput {
+  id: string;
+  subject: string;
+  toText: string;
+  tier: SenderTier;
+  sentAt: string;        // YYYY-MM-DD HH:MM
+  daysWaiting: number;
+  threadCount: number;
+  body: string;          // 先生が書いた本文
+}
+
+export interface FollowUpJudgment {
+  id: string;
+  needsReply: boolean;
+  ask: string;
+  summary: string;
+  nudgeOk: boolean;
+  urgency: 'now' | 'soon' | 'later';
+}
+
+const FOLLOWUP_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          needsReply: { type: 'boolean' },
+          ask: { type: 'string' },
+          summary: { type: 'string' },
+          nudgeOk: { type: 'boolean' },
+          urgency: { type: 'string', enum: ['now', 'soon', 'later'] },
+        },
+        required: ['id', 'needsReply', 'ask', 'summary', 'nudgeOk', 'urgency'],
+      },
+    },
+  },
+  required: ['items'],
+};
+
+export const SYSTEM_FOLLOWUP = `あなたは福井大学 重信颯人先生の相棒「調(しらべ)」。先生が送ったメールのうち「相手からの返事を待っているもの」を見分ける。
+- needsReply: 先生がその相手に回答・資料・判断・日程・確認などを求めていて、それがまだ来ていない前提で待つべきなら true。報告・お礼・了解・添付の送付だけで返事が要らないなら false。メーリングリスト宛や一斉連絡も false。
+- ask: 先生が相手に求めたことを1文(主語は省く。「候補日の回答」「書類の返送」など)。
+- summary: 1行。誰に何の件で。
+- nudgeOk: 今の時点で催促してよいか。目上・学外で待ち日数が5日未満なら false。学生・業者・学内事務・期限が迫るものは true。
+- urgency: now(期限や会議が近い) / soon(今週中に欲しい) / later。
+必ず全件 id ごとに返す。`;
+
+export function buildFollowUpPrompt(ctx: JudgmentContext, inputs: FollowUpInput[]): string {
+  const parts: string[] = [`今日の日付: ${ctx.today}`, ctx.profile.split('\n').slice(0, 12).join('\n'), '\n---\n## 先生が送って返事が無いメール'];
+  inputs.forEach((f, i) => {
+    parts.push(`\n### ${i + 1} (id: ${f.id})`);
+    parts.push(`件名: ${f.subject || '(件名なし)'}`);
+    parts.push(`宛先: ${f.toText} | 関係: ${TIER_LABEL[f.tier]} | 送信: ${f.sentAt} (${f.daysWaiting}日前) | スレッド: ${f.threadCount}通`);
+    parts.push(`先生の本文:\n${f.body || '(本文なし)'}`);
+  });
+  parts.push('\n上記の全件について判定を返してください。');
+  return parts.join('\n');
+}
+
+export async function judgeFollowUps(
+  runner: ClaudeRunner,
+  ctx: JudgmentContext,
+  inputs: FollowUpInput[],
+  model: string,
+): Promise<{ judgments: Map<string, FollowUpJudgment>; aiCalls: number; costUsd: number; errors: string[] }> {
+  const out = { judgments: new Map<string, FollowUpJudgment>(), aiCalls: 0, costUsd: 0, errors: [] as string[] };
+  if (inputs.length === 0) return out;
+  const batches: FollowUpInput[][] = [];
+  for (let i = 0; i < inputs.length; i += 8) batches.push(inputs.slice(i, i + 8));
+  await Promise.all(batches.map(async (batch, bi) => {
+    const res = await runner.run<{ items: Partial<FollowUpJudgment>[] }>({
+      label: `followup#${bi + 1}`,
+      model,
+      systemPrompt: SYSTEM_FOLLOWUP,
+      prompt: buildFollowUpPrompt(ctx, batch),
+      schema: FOLLOWUP_SCHEMA,
+      timeoutMs: 120_000,
+    });
+    out.aiCalls += 1;
+    out.costUsd += res.costUsd;
+    if (!res.ok || !res.data) { out.errors.push(res.error ?? '返事待ちの判定に失敗'); return; }
+    for (const j of res.data.items ?? []) {
+      if (!j || typeof j.id !== 'string' || !batch.some((b) => b.id === j.id)) continue;
+      out.judgments.set(j.id, {
+        id: j.id,
+        needsReply: !!j.needsReply,
+        ask: String(j.ask ?? '').trim(),
+        summary: String(j.summary ?? '').trim(),
+        nudgeOk: !!j.nudgeOk,
+        urgency: j.urgency === 'now' || j.urgency === 'soon' ? j.urgency : 'later',
+      });
+    }
+  }));
+  return out;
+}
+
+export const SYSTEM_NUDGE = `あなたは福井大学の重信颯人先生の相棒として、返事が来ていない相手へ先生本人が送る短いリマインドを書く。
+- 1行目は宛名(「〇〇先生」「〇〇さま」「〇〇さん」。相手の署名や過去のやりとりに合わせる)。2行目は空行。3行目は挨拶(学外・目上は「いつも大変お世話になっております，重信です。」、学内の親しい相手・学生は「重信です。」)。
+- 「先日お送りした〜の件，ご確認いただけましたでしょうか。」の形で柔らかく。相手を責めない。期限や会議が近ければ一言添える。
+- 3〜6行。読点は全角カンマ「，」。結びは「お忙しいところ恐れ入りますが，よろしくお願い致します。」など。署名は書かない。
+- 出力は本文のみ。件名・説明・前置きは書かない。`;
+
+export interface NudgeParams {
+  subject: string;
+  toName: string;
+  toAddress: string;
+  sentAt: string;
+  daysWaiting: number;
+  ask: string;
+  myBody: string;
+  exemplars: string[];
+  instruction?: string;
+}
+
+export function buildNudgePrompt(ctx: JudgmentContext, p: NudgeParams): string {
+  const parts: string[] = [`今日の日付: ${ctx.today}`, ctx.profile];
+  if (p.exemplars.length > 0) {
+    parts.push('\n## 先生が実際に書いた最近のメール(文体の見本)');
+    p.exemplars.forEach((e, i) => parts.push(`\n--- 見本 ${i + 1} ---\n${e}`));
+  }
+  parts.push('\n## 催促する案件');
+  parts.push(`件名: ${p.subject}`);
+  parts.push(`相手: ${p.toName ? `${p.toName} <${p.toAddress}>` : p.toAddress}`);
+  parts.push(`先生が送った日: ${p.sentAt}(${p.daysWaiting}日前)`);
+  parts.push(`先生が求めたこと: ${p.ask}`);
+  parts.push(`\n## 先生が送った本文\n${p.myBody || '(本文なし)'}`);
+  if (p.instruction) parts.push(`\n## 先生からの追加指示\n${p.instruction}`);
+  parts.push('\nリマインドの本文だけを出力してください。');
+  return parts.join('\n');
+}
+
+export async function draftNudge(runner: ClaudeRunner, ctx: JudgmentContext, p: NudgeParams, model: string): Promise<{ ok: boolean; draft: string; error?: string; costUsd: number }> {
+  const res = await runner.run<unknown>({ label: 'nudge', model, systemPrompt: SYSTEM_NUDGE, prompt: buildNudgePrompt(ctx, p), timeoutMs: 120_000 });
+  if (!res.ok) return { ok: false, draft: '', error: res.error, costUsd: res.costUsd };
+  const text = res.text.trim().replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/, '').trim();
+  if (!text) return { ok: false, draft: '', error: '空の催促文が返りました', costUsd: res.costUsd };
+  return { ok: true, draft: text, costUsd: res.costUsd };
+}
+
+// =====================================================================
+// v3.1 作業への受け渡し: 案件 → 該当フォルダの推定 + 作業指示書
+// =====================================================================
+
+export interface HandoffInput {
+  subject: string;
+  fromName: string;
+  fromAddress: string;
+  ask: string;
+  summary: string;
+  deadline: string | null;
+  category: string;
+  thread: ThreadContextMessage[];
+  folderMap: string;     // references/folder-map.md(無ければ空)
+  recentFolders: string[];
+}
+
+export interface HandoffJudgment {
+  folder: string | null;       // 絶対パス(folderMap のベースパス + 相対)。分からなければ null
+  folderReason: string;
+  title: string;               // 作業の短い題
+  instructions: string;        // 作業指示書(Markdown)
+  deliverable: string;         // 成果物(1行)
+}
+
+const HANDOFF_SCHEMA = {
+  type: 'object',
+  properties: {
+    folder: { type: ['string', 'null'] },
+    folderReason: { type: 'string' },
+    title: { type: 'string' },
+    instructions: { type: 'string' },
+    deliverable: { type: 'string' },
+  },
+  required: ['folder', 'folderReason', 'title', 'instructions', 'deliverable'],
+};
+
+export const SYSTEM_HANDOFF = `あなたは福井大学 重信颯人先生の相棒「調(しらべ)」。メールの案件を「作業」に引き渡すための準備をする。
+出力は2つ:
+1. folder: この案件の資料がある(または置くべき)フォルダの絶対パス。フォルダマップのベースパスと年度・カテゴリ番号・案件名の流儀に従って推定する。該当がはっきりしないときは年度とカテゴリまでの既存フォルダにとどめる。まったく分からなければ null。存在しない深いパスを創作しない。
+2. instructions: 先生(またはその場で動く Claude Code)がそのフォルダで作業を始めるための指示書(Markdown、400〜900字)。見出し: 「## 目的」「## 相手と経緯」(日付・誰が何を言ったか)「## やること」(番号付き、具体的に。参照すべきファイル名の見当があれば書く)「## 期限と制約」「## 成果物」「## 返信の方針」(作業後に相手へ何を返すか)。推測は「(推定)」と明記。先生の判断が要る点は「【先生の判断】」で示す。
+title は 12 字程度の作業名、deliverable は成果物を1行で。`;
+
+export function buildHandoffPrompt(ctx: JudgmentContext, h: HandoffInput): string {
+  const parts: string[] = [`今日の日付: ${ctx.today}`, ctx.profile];
+  if (h.folderMap) parts.push(`\n## フォルダマップ\n${h.folderMap}`);
+  if (h.recentFolders.length > 0) parts.push(`\n## 最近使ったフォルダ\n${h.recentFolders.map((f) => `- ${f}`).join('\n')}`);
+  parts.push('\n## 案件');
+  parts.push(`件名: ${h.subject}`);
+  parts.push(`相手: ${h.fromName ? `${h.fromName} <${h.fromAddress}>` : h.fromAddress}`);
+  parts.push(`種別: ${h.category} / 期限: ${h.deadline ?? 'なし'}`);
+  parts.push(`先生がすべきこと: ${h.ask}`);
+  parts.push(`要約: ${h.summary}`);
+  parts.push('\n## スレッド(古い順)');
+  for (const m of h.thread) {
+    const d = m.date instanceof Date ? m.date : new Date(m.date);
+    const stamp = isNaN(d.getTime()) ? '' : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    parts.push(`\n--- ${m.isSentByMe ? '先生(自分)' : m.from} (${stamp}) ---\n${m.body || '(本文なし)'}`);
+  }
+  parts.push('\nフォルダの推定と作業指示書を返してください。');
+  return parts.join('\n');
+}
+
+export async function prepareHandoff(runner: ClaudeRunner, ctx: JudgmentContext, h: HandoffInput, model: string): Promise<{ ok: boolean; data?: HandoffJudgment; error?: string; costUsd: number }> {
+  const res = await runner.run<Partial<HandoffJudgment>>({ label: 'handoff', model, systemPrompt: SYSTEM_HANDOFF, prompt: buildHandoffPrompt(ctx, h), schema: HANDOFF_SCHEMA, timeoutMs: 150_000 });
+  if (!res.ok || !res.data) return { ok: false, error: res.error ?? '作業指示書の生成に失敗しました', costUsd: res.costUsd };
+  const d = res.data;
+  const folder = typeof d.folder === 'string' && d.folder.trim().startsWith('/') ? d.folder.trim().replace(/\/+$/, '') : null;
+  return {
+    ok: true,
+    costUsd: res.costUsd,
+    data: {
+      folder,
+      folderReason: String(d.folderReason ?? '').trim(),
+      title: String(d.title ?? '').trim() || h.subject.slice(0, 20),
+      instructions: String(d.instructions ?? '').trim(),
+      deliverable: String(d.deliverable ?? '').trim(),
+    },
+  };
+}
+
+// =====================================================================
+// v3.1 予定だけを後から抜く(event 欄の無い旧案件の補完)
+// =====================================================================
+
+export interface EventOnlyInput { id: string; subject: string; receivedAt: string; body: string }
+
+const EVENT_ONLY_SCHEMA = {
+  type: 'object',
+  properties: {
+    items: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          id: { type: 'string' },
+          event: {
+            type: ['object', 'null'],
+            properties: {
+              title: { type: 'string' }, start: { type: 'string' }, end: { type: ['string', 'null'] }, allDay: { type: 'boolean' },
+              location: { type: 'string' }, kind: { type: 'string', enum: ['meeting', 'deadline', 'event', 'other'] },
+            },
+            required: ['title', 'start', 'allDay', 'kind'],
+          },
+        },
+        required: ['id', 'event'],
+      },
+    },
+  },
+  required: ['items'],
+};
+
+export const SYSTEM_EVENT_ONLY = `あなたは重信先生の相棒「調」。各メールから、先生が出る(または押さえるべき)会議・打合せ・行事・審査・締切の日時を1つだけ抜き出す。
+- title は短く。start は YYYY-MM-DDTHH:MM(時刻不明・終日は YYYY-MM-DD で allDay true)。年は今日の日付と受信日から補う。end は分かれば。
+- kind: meeting / deadline(提出・回答期限) / event(講演・行事) / other。
+- 候補日の列挙・未確定の調整中・過去の日付・先生に関係ない予定は null。
+必ず全件 id ごとに返す。`;
+
+export async function extractEvents(runner: ClaudeRunner, ctx: JudgmentContext, inputs: EventOnlyInput[], model: string): Promise<{ events: Map<string, CaseEvent | null>; aiCalls: number; costUsd: number; errors: string[] }> {
+  const out = { events: new Map<string, CaseEvent | null>(), aiCalls: 0, costUsd: 0, errors: [] as string[] };
+  if (inputs.length === 0) return out;
+  const batches: EventOnlyInput[][] = [];
+  for (let i = 0; i < inputs.length; i += 10) batches.push(inputs.slice(i, i + 10));
+  await Promise.all(batches.map(async (batch, bi) => {
+    const prompt = [`今日の日付: ${ctx.today}`, '## メール', ...batch.map((b, i) => `\n### ${i + 1} (id: ${b.id})\n件名: ${b.subject}\n受信: ${b.receivedAt}\n本文:\n${(b.body || '').slice(0, 1200)}`), '\n全件について予定を返してください。'].join('\n');
+    const res = await runner.run<{ items: Array<{ id: string; event: unknown }> }>({ label: `events#${bi + 1}`, model, systemPrompt: SYSTEM_EVENT_ONLY, prompt, schema: EVENT_ONLY_SCHEMA, timeoutMs: 120_000 });
+    out.aiCalls += 1;
+    out.costUsd += res.costUsd;
+    if (!res.ok || !res.data) { out.errors.push(res.error ?? '予定の抽出に失敗'); return; }
+    for (const it of res.data.items ?? []) {
+      if (!it || typeof it.id !== 'string' || !batch.some((b) => b.id === it.id)) continue;
+      out.events.set(it.id, normalizeEvent(it.event, ctx.today));
+    }
+  }));
+  return out;
 }

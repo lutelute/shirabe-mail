@@ -181,6 +181,30 @@ const api = {
     ipcRenderer.on('butlerProgress', handler);
     return () => ipcRenderer.removeListener('butlerProgress', handler);
   },
+  // 相棒 v3
+  partnerGetState: () => ipcRenderer.invoke('partner:getState'),
+  partnerRunNow: () => ipcRenderer.invoke('partner:runNow'),
+  partnerSend: (params: any) => ipcRenderer.invoke('partner:send', params),
+  partnerCancelSend: (params: any) => ipcRenderer.invoke('partner:cancelSend', params),
+  partnerSendNow: (params: any) => ipcRenderer.invoke('partner:sendNow', params),
+  partnerAnswerDecision: (params: any) => ipcRenderer.invoke('partner:answerDecision', params),
+  partnerSaveDraft: (params: any) => ipcRenderer.invoke('partner:saveDraft', params),
+  partnerFollowUpAction: (params: any) => ipcRenderer.invoke('partner:followUpAction', params),
+  partnerUndoTidy: (params: any) => ipcRenderer.invoke('partner:undoTidy', params),
+  partnerDiscoverAccounts: () => ipcRenderer.invoke('partner:discoverAccounts'),
+  partnerTestConnection: (params: any) => ipcRenderer.invoke('partner:testConnection', params),
+  partnerGetProfile: () => ipcRenderer.invoke('partner:getProfile'),
+  partnerSaveProfile: (content: string) => ipcRenderer.invoke('partner:saveProfile', content),
+  partnerHandoffPrepare: (params: any) => ipcRenderer.invoke('partner:handoffPrepare', params),
+  partnerHandoffOpen: (params: any) => ipcRenderer.invoke('partner:handoffOpen', params),
+  partnerPickFolder: (params: any) => ipcRenderer.invoke('partner:pickFolder', params),
+  partnerDraftToEmClient: (params: any) => ipcRenderer.invoke('partner:draftToEmClient', params),
+  partnerAddToCalendar: (params: any) => ipcRenderer.invoke('partner:addToCalendar', params),
+  onPartnerState: (callback: (state: any) => void) => {
+    const handler = (_event: any, state: any) => callback(state);
+    ipcRenderer.on('partner:state', handler);
+    return () => ipcRenderer.removeListener('partner:state', handler);
+  },
   // Update notification listeners
   onUpdateAvailable: (callback: (info: any) => void) => {
     const handler = (_event: any, info: any) => callback(info);

@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../context/AppContext';
-import { useImapOperations } from '../hooks/useImapOperations';
-import type { AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerSchedule, ButlerModel } from '../types';
+import type {
+  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel,
+  PartnerMode, AccountSmtpConfig, SmtpCredentials, AccountEndpoints,
+} from '../types';
 
 function getDefaultImapForAccount(email: string): Partial<ImapCredentials> {
   const domain = email.split('@')[1]?.toLowerCase() ?? '';
@@ -11,17 +13,81 @@ function getDefaultImapForAccount(email: string): Partial<ImapCredentials> {
   return { host: '', port: 993, secure: true };
 }
 
+function getDefaultSmtpForAccount(email: string): Partial<SmtpCredentials> {
+  const domain = email.split('@')[1]?.toLowerCase() ?? '';
+  if (domain.includes('gmail') || domain.includes('google')) {
+    return { host: 'smtp.gmail.com', port: 587, secure: false };
+  }
+  return { host: '', port: 465, secure: true };
+}
+
+const MODE_CARDS: Array<{ value: PartnerMode; title: string; desc: string }> = [
+  { value: 'observe', title: '見るだけ', desc: '新着を読んで判断と申し送りだけ。メールボックスには触りません。' },
+  { value: 'assist', title: '下書き・整理まで(推奨)', desc: '返信の下書き、一斉配信の片付け、迷惑メールの隔離まで。送信は「送る」の1タップ(猶予あり・取り消せます)。' },
+  { value: 'delegate', title: '定型返信は任せる', desc: '常連・学内・面識ありへのお礼・確認・了解・日程確定だけ自動で送信予定に載せます。送信前に猶予があり取り消せます。決める必要があるものは必ず聞きます。' },
+];
+
+const INTERVAL_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0, label: '手動のみ' },
+  { value: 15, label: '15分' },
+  { value: 30, label: '30分' },
+  { value: 60, label: '1時間' },
+  { value: 180, label: '3時間' },
+];
+
+const DELAY_OPTIONS: Array<{ value: number; label: string }> = [
+  { value: 0, label: 'すぐ' },
+  { value: 2, label: '2分' },
+  { value: 5, label: '5分' },
+  { value: 10, label: '10分' },
+  { value: 30, label: '30分' },
+];
+
+const inputCls = 'w-full h-8 px-3 text-[13px] bg-card border border-hairline rounded-md focus:border-primary/60 text-ink disabled:cursor-not-allowed';
+const smallInputCls = 'w-full h-7 px-2 text-xs bg-card border border-hairline rounded-md focus:border-primary/60 text-ink';
+
 export default function SettingsView() {
   const { settings, accounts, saveSettings, updateState, startDownloadAndInstall, checkForUpdates } = useAppContext();
   const [draft, setDraft] = useState<AppSettings>({ ...settings });
   const [saved, setSaved] = useState(false);
-  const { testing, testResult, folders, foldersLoading, testConnection, fetchFolders } = useImapOperations();
-  const [testingAccount, setTestingAccount] = useState<string | null>(null);
   const [appVersion, setAppVersion] = useState('');
+
+  // 相棒: 接続
+  const [endpoints, setEndpoints] = useState<Record<string, AccountEndpoints>>({});
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverMsg, setDiscoverMsg] = useState<string | null>(null);
+  const [sameAsImap, setSameAsImap] = useState<Record<string, boolean>>({});
+  const [testingKey, setTestingKey] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { success: boolean; error?: string }>>({});
+  const [showPassword, setShowPassword] = useState<Record<string, boolean>>({});
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  // 相棒: 教える
+  const [profile, setProfile] = useState<{ content: string; path: string; sources: string[] } | null>(null);
+  const [profileDraft, setProfileDraft] = useState('');
+  const [profileSaved, setProfileSaved] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
 
   useEffect(() => {
     window.electronAPI.getAppVersion().then((v: string) => setAppVersion(v));
+    window.electronAPI.partnerGetProfile()
+      .then((p) => { setProfile(p); setProfileDraft(p.content); })
+      .catch(() => setProfile({ content: '', path: '', sources: [] }));
   }, []);
+
+  // SMTP のパスワードが空なら「IMAP と同じ」を既定で ON
+  useEffect(() => {
+    setSameAsImap((prev) => {
+      const next = { ...prev };
+      for (const a of accounts) {
+        if (next[a.email] === undefined) {
+          const smtp = settings.smtpConfigs?.find((c) => c.accountEmail === a.email);
+          next[a.email] = !smtp?.credentials?.password;
+        }
+      }
+      return next;
+    });
+  }, [accounts, settings.smtpConfigs]);
 
   const update = <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
@@ -38,15 +104,13 @@ export default function SettingsView() {
     setSaved(false);
   };
 
-  // 夜間執事の対象アカウント。空配列 = 選択中の全アカウントが対象。
-  // 一部だけ選べば「仕事用だけ自動・プライベートは手動」にできる。
+  // 相棒の対象アカウント。空配列 = 選択中の全アカウントが対象。
   const toggleButlerAccount = (email: string) => {
     setDraft((prev) => {
       const current = prev.butlerAccounts.length > 0 ? prev.butlerAccounts : [...prev.selectedAccounts];
       const next = current.includes(email)
         ? current.filter((e) => e !== email)
         : [...current, email];
-      // 選択中アカウントが全部対象になったら [] に正規化（=全部）
       const allSelected =
         prev.selectedAccounts.length > 0 && prev.selectedAccounts.every((e) => next.includes(e));
       return { ...prev, butlerAccounts: allSelected ? [] : next };
@@ -54,97 +118,175 @@ export default function SettingsView() {
     setSaved(false);
   };
 
-  const updateImapConfig = (accountEmail: string, updates: Partial<AccountImapConfig>) => {
+  // ---- IMAP / SMTP 設定の更新 ----
+  const getImap = (email: string): AccountImapConfig | undefined => draft.imapConfigs.find((c) => c.accountEmail === email);
+  const getSmtp = (email: string): AccountSmtpConfig | undefined => (draft.smtpConfigs ?? []).find((c) => c.accountEmail === email);
+
+  const setImap = useCallback((email: string, creds: Partial<ImapCredentials>, extra?: Partial<Omit<AccountImapConfig, 'credentials'>>) => {
     setDraft((prev) => {
       const configs = [...prev.imapConfigs];
-      const idx = configs.findIndex((c) => c.accountEmail === accountEmail);
-      if (idx >= 0) {
-        configs[idx] = { ...configs[idx], ...updates };
-      } else {
-        const defaults = getDefaultImapForAccount(accountEmail);
-        configs.push({
-          accountEmail,
-          credentials: {
-            host: defaults.host ?? '',
-            port: defaults.port ?? 993,
-            user: accountEmail,
-            password: '',
-            secure: defaults.secure ?? true,
-          },
-          trashFolderPath: 'Trash',
-          ...updates,
-        });
+      const idx = configs.findIndex((c) => c.accountEmail === email);
+      const d = getDefaultImapForAccount(email);
+      const base: ImapCredentials = idx >= 0 && configs[idx].credentials
+        ? configs[idx].credentials!
+        : { host: d.host ?? '', port: d.port ?? 993, user: email, password: '', secure: d.secure ?? true };
+      const merged: AccountImapConfig = {
+        accountEmail: email,
+        trashFolderPath: idx >= 0 ? configs[idx].trashFolderPath : 'Trash',
+        ...(idx >= 0 ? configs[idx] : {}),
+        ...extra,
+        credentials: { ...base, ...creds },
+      };
+      if (idx >= 0) configs[idx] = merged; else configs.push(merged);
+      // 「IMAP と同じ」なら SMTP のパスワードも追従
+      let smtpConfigs = prev.smtpConfigs ?? [];
+      if (creds.password !== undefined && sameAsImap[email]) {
+        smtpConfigs = smtpConfigs.map((s) => s.accountEmail === email && s.credentials ? { ...s, credentials: { ...s.credentials, password: creds.password! } } : s);
       }
-      return { ...prev, imapConfigs: configs };
+      return { ...prev, imapConfigs: configs, smtpConfigs };
     });
     setSaved(false);
-  };
+  }, [sameAsImap]);
 
-  const updateImapCredential = (accountEmail: string, field: keyof ImapCredentials, value: string | number | boolean) => {
+  const setSmtp = useCallback((email: string, creds: Partial<SmtpCredentials>, extra?: Partial<Omit<AccountSmtpConfig, 'credentials'>>) => {
     setDraft((prev) => {
-      const configs = [...prev.imapConfigs];
-      const idx = configs.findIndex((c) => c.accountEmail === accountEmail);
-      if (idx >= 0 && configs[idx].credentials) {
-        configs[idx] = {
-          ...configs[idx],
-          credentials: { ...configs[idx].credentials!, [field]: value },
-        };
-      } else {
-        const defaults = getDefaultImapForAccount(accountEmail);
-        const creds: ImapCredentials = {
-          host: defaults.host ?? '',
-          port: defaults.port ?? 993,
-          user: accountEmail,
-          password: '',
-          secure: defaults.secure ?? true,
-          [field]: value,
-        };
-        if (idx >= 0) {
-          configs[idx] = { ...configs[idx], credentials: creds };
-        } else {
-          configs.push({ accountEmail, credentials: creds, trashFolderPath: 'Trash' });
+      const configs = [...(prev.smtpConfigs ?? [])];
+      const idx = configs.findIndex((c) => c.accountEmail === email);
+      const d = getDefaultSmtpForAccount(email);
+      const base: SmtpCredentials = idx >= 0 && configs[idx].credentials
+        ? configs[idx].credentials!
+        : { host: d.host ?? '', port: d.port ?? 465, user: email, password: '', secure: d.secure ?? true };
+      const merged: AccountSmtpConfig = {
+        accountEmail: email,
+        displayName: idx >= 0 ? configs[idx].displayName : '',
+        signature: idx >= 0 ? configs[idx].signature : '',
+        ...(idx >= 0 ? configs[idx] : {}),
+        ...extra,
+        credentials: { ...base, ...creds },
+      };
+      if (idx >= 0) configs[idx] = merged; else configs.push(merged);
+      return { ...prev, smtpConfigs: configs };
+    });
+    setSaved(false);
+  }, []);
+
+  const discover = async () => {
+    setDiscovering(true);
+    setDiscoverMsg(null);
+    try {
+      const eps = await window.electronAPI.partnerDiscoverAccounts();
+      const map: Record<string, AccountEndpoints> = {};
+      for (const ep of eps) map[ep.accountEmail] = ep;
+      setEndpoints(map);
+      setDraft((prev) => {
+        const imapConfigs = [...prev.imapConfigs];
+        const smtpConfigs = [...(prev.smtpConfigs ?? [])];
+        for (const ep of eps) {
+          if (ep.imap) {
+            const idx = imapConfigs.findIndex((c) => c.accountEmail === ep.accountEmail);
+            const old = idx >= 0 ? imapConfigs[idx] : undefined;
+            const merged: AccountImapConfig = {
+              accountEmail: ep.accountEmail,
+              trashFolderPath: ep.trashFolder || old?.trashFolderPath || 'Trash',
+              credentials: {
+                host: ep.imap.host, port: ep.imap.port, secure: ep.imap.secure,
+                user: ep.imap.user || ep.accountEmail,
+                password: old?.credentials?.password ?? '',
+              },
+            };
+            if (idx >= 0) imapConfigs[idx] = merged; else imapConfigs.push(merged);
+          }
+          if (ep.smtp) {
+            const idx = smtpConfigs.findIndex((c) => c.accountEmail === ep.accountEmail);
+            const old = idx >= 0 ? smtpConfigs[idx] : undefined;
+            const merged: AccountSmtpConfig = {
+              accountEmail: ep.accountEmail,
+              displayName: ep.displayName || old?.displayName || '',
+              signature: old?.signature || ep.signature || '',
+              credentials: {
+                host: ep.smtp.host, port: ep.smtp.port, secure: ep.smtp.secure,
+                user: ep.smtp.user || ep.accountEmail,
+                password: old?.credentials?.password ?? '',
+              },
+            };
+            if (idx >= 0) smtpConfigs[idx] = merged; else smtpConfigs.push(merged);
+          }
         }
-      }
-      return { ...prev, imapConfigs: configs };
-    });
-    setSaved(false);
+        return { ...prev, imapConfigs, smtpConfigs };
+      });
+      setSaved(false);
+      setDiscoverMsg(eps.length > 0 ? `${eps.length}件のアカウントの接続先を取り込みました。パスワードを入れて「保存」してください。` : 'eM Client のアカウント設定が見つかりませんでした。');
+    } catch (e) {
+      setDiscoverMsg(`検出に失敗しました: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setDiscovering(false);
+    }
   };
 
-  const handleTestConnection = async (accountEmail: string) => {
-    const config = draft.imapConfigs.find((c) => c.accountEmail === accountEmail);
-    if (!config?.credentials) return;
-    setTestingAccount(accountEmail);
-    await testConnection(config.credentials);
-    // Also fetch folders on success
-    const result = await testConnection(config.credentials);
-    if (result.success) {
-      const folderList = await fetchFolders(config.credentials);
-      // Auto-detect trash folder
-      const trashFolder = folderList.find((f) =>
-        /trash|ゴミ箱|\[gmail\]\/ゴミ箱/i.test(f),
-      );
-      if (trashFolder) {
-        updateImapConfig(accountEmail, { trashFolderPath: trashFolder });
-      }
+  const testConn = async (email: string, kind: 'imap' | 'smtp') => {
+    const key = `${email}:${kind}`;
+    let credentials: ImapCredentials | SmtpCredentials | null | undefined;
+    if (kind === 'imap') credentials = getImap(email)?.credentials;
+    else {
+      const s = getSmtp(email)?.credentials;
+      credentials = s ? { ...s, password: sameAsImap[email] ? (getImap(email)?.credentials?.password ?? s.password) : s.password } : s;
     }
-    setTestingAccount(null);
+    if (!credentials?.host || !credentials?.password) {
+      setTestResults((prev) => ({ ...prev, [key]: { success: false, error: 'ホストとパスワードを入力してください' } }));
+      return;
+    }
+    setTestingKey(key);
+    try {
+      const res = await window.electronAPI.partnerTestConnection({ kind, credentials });
+      setTestResults((prev) => ({ ...prev, [key]: res }));
+      if (kind === 'imap' && res.success) {
+        try {
+          const folders = await window.electronAPI.listImapFolders(credentials as ImapCredentials);
+          const trash = folders.find((f) => /trash|ゴミ箱|deleted/i.test(f));
+          const cur = getImap(email)?.trashFolderPath;
+          if (trash && (!cur || cur === 'Trash')) setImap(email, {}, { trashFolderPath: trash });
+        } catch { /* optional */ }
+      }
+    } catch (e) {
+      setTestResults((prev) => ({ ...prev, [key]: { success: false, error: e instanceof Error ? e.message : String(e) } }));
+    } finally {
+      setTestingKey(null);
+    }
   };
 
   const handleSave = async () => {
-    await saveSettings(draft);
+    // 「IMAP と同じパスワード」を反映してから保存
+    const smtpConfigs = (draft.smtpConfigs ?? []).map((s) => {
+      if (!sameAsImap[s.accountEmail] || !s.credentials) return s;
+      const imapPw = draft.imapConfigs.find((c) => c.accountEmail === s.accountEmail)?.credentials?.password ?? '';
+      return imapPw ? { ...s, credentials: { ...s.credentials, password: imapPw } } : s;
+    });
+    const next = { ...draft, smtpConfigs };
+    setDraft(next);
+    await saveSettings(next);
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
 
-  const getImapConfig = (email: string): AccountImapConfig | undefined =>
-    draft.imapConfigs.find((c) => c.accountEmail === email);
+  const saveProfile = async () => {
+    setProfileSaving(true);
+    try {
+      await window.electronAPI.partnerSaveProfile(profileDraft);
+      setProfile((p) => p ? { ...p, content: profileDraft } : p);
+      setProfileSaved(true);
+      setTimeout(() => setProfileSaved(false), 2000);
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   // Toggle switch component for consistency
-  const Toggle = ({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) => (
+  const Toggle = ({ value, onChange, disabled }: { value: boolean; onChange: (v: boolean) => void; disabled?: boolean }) => (
     <button
-      onClick={() => onChange(!value)}
-      className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 ${
-        value ? 'bg-accent-500' : 'bg-surface-600'
+      onClick={() => !disabled && onChange(!value)}
+      disabled={disabled}
+      className={`relative w-10 h-5 rounded-full transition-colors flex-shrink-0 disabled:opacity-40 ${
+        value ? 'bg-primary' : 'bg-hairline-2'
       }`}
     >
       <span className={`absolute top-0.5 left-0.5 w-4 h-4 bg-white rounded-full transition-transform ${
@@ -155,21 +297,472 @@ export default function SettingsView() {
 
   // Section header component
   const SectionHeader = ({ title }: { title: string }) => (
-    <div className="flex items-center gap-2 mb-3">
-      <h3 className="text-xs font-semibold text-surface-400 uppercase tracking-wider">{title}</h3>
-      <div className="flex-1 h-px bg-surface-700" />
+    <div className="flex items-center gap-3 mb-4">
+      <h3 className="text-[15px] font-semibold text-ink">{title}</h3>
+      <div className="flex-1 h-px bg-hairline" />
     </div>
   );
 
+  const ChoiceRow = <T extends string | number>({ value, options, onChange, disabled }: { value: T; options: Array<{ value: T; label: string }>; onChange: (v: T) => void; disabled?: boolean }) => (
+    <div className="flex flex-wrap gap-2">
+      {options.map((opt) => (
+        <button
+          key={String(opt.value)}
+          disabled={disabled}
+          onClick={() => onChange(opt.value)}
+          className={`h-8 px-3 text-[13px] rounded-md border transition-colors disabled:opacity-40 ${
+            value === opt.value
+              ? 'bg-primary-soft text-primary border-primary/40'
+              : 'bg-card text-ink-2 hover:text-ink border-hairline'
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+
+  const partnerOff = !draft.butlerEnabled;
+
+  const TOC: Array<{ id: string; label: string; sub?: boolean }> = [
+    { id: 's-partner', label: '相棒' },
+    { id: 's-connect', label: '接続', sub: true },
+    { id: 's-teach', label: '相棒に教える', sub: true },
+    { id: 's-general', label: '一般' },
+    { id: 's-accounts', label: 'アカウント' },
+    { id: 's-ai', label: 'AI' },
+    { id: 's-mail', label: 'メール表示' },
+    { id: 's-filter', label: 'フィルタ' },
+    { id: 's-update', label: '更新' },
+  ];
+  const jump = (id: string) => { document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }); };
+
   return (
-    <div className="h-full flex flex-col max-w-2xl">
-      <div className="px-5 py-3 border-b border-surface-700/50">
-        <h2 className="text-lg font-semibold text-surface-100">設定</h2>
+    <div className="h-full flex bg-paper">
+      <aside className="w-44 flex-shrink-0 border-r border-hairline px-3 py-5">
+        <div className="text-[11px] text-ink-3 tracking-wide px-2 mb-2">設定</div>
+        {TOC.map((t) => (
+          <button key={t.id} onClick={() => jump(t.id)} className={`w-full text-left h-8 rounded-md text-[12.5px] text-ink-2 hover:text-ink hover:bg-card-2 ${t.sub ? 'pl-6' : 'px-2'}`}>{t.label}</button>
+        ))}
+        <div className="mt-4 px-2 text-[10.5px] text-ink-3">v{appVersion}</div>
+      </aside>
+    <div className="h-full flex-1 flex flex-col min-w-0">
+      <div className="px-6 py-3 border-b border-hairline flex items-center">
+        <h2 className="text-[15px] font-semibold text-ink">設定</h2>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6">
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-8 max-w-3xl">
+        {/* ─── 相棒 ─── */}
+        <section id="s-partner">
+          <SectionHeader title="相棒" />
+          <div className="space-y-5">
+            <div className="p-3 bg-accent-500/10 border border-accent-500/30 rounded text-xs text-surface-300 leading-relaxed">
+              新着メールを読み、「何をすべきか・期限・優先度」を判断して、返信の下書きと今日の段取りを用意します。
+              <span className="text-accent-400 font-medium"> 送信は必ず猶予を挟み、その間は取り消せます。削除はゴミ箱への移動のみで、必ず確認を求めます。</span>
+              <br />AI は Claude Code CLI 経由で動くため、Claude Code にログイン済みなら API キーは不要です。
+            </div>
+
+            {partnerOff && (
+              <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded text-xs text-amber-300">
+                相棒は止まっています。下の「相棒を止める」を OFF にすると再開します。
+              </div>
+            )}
+
+            {/* 権限レベル */}
+            <div className={partnerOff ? 'opacity-50 pointer-events-none' : ''}>
+              <label className="block text-sm text-surface-200 mb-2">権限レベル</label>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {MODE_CARDS.map((m) => {
+                  const active = (draft.partnerMode ?? 'assist') === m.value;
+                  return (
+                    <button
+                      key={m.value}
+                      onClick={() => update('partnerMode', m.value)}
+                      className={`text-left p-3.5 rounded-lg border-2 transition-colors ${
+                        active
+                          ? 'bg-primary-soft border-primary'
+                          : 'bg-card border-hairline hover:border-hairline-2'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className={`w-3 h-3 rounded-full border-2 ${active ? 'bg-primary border-primary' : 'border-hairline-2'}`} />
+                        <span className={`text-[13.5px] font-semibold ${active ? 'text-primary' : 'text-ink'}`}>{m.title}</span>
+                      </div>
+                      <p className="text-[12px] text-ink-2 mt-1 ml-5 leading-relaxed">{m.desc}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className={`space-y-4 ${partnerOff ? 'opacity-50 pointer-events-none' : ''}`}>
+              <div>
+                <label className="block text-sm text-surface-200 mb-2">自動で確認する間隔</label>
+                <ChoiceRow value={draft.partnerIntervalMinutes ?? 30} options={INTERVAL_OPTIONS} onChange={(v) => update('partnerIntervalMinutes', v)} />
+                <p className="text-xs text-surface-500 mt-1">起動時とスリープからの復帰時にも確認します。</p>
+              </div>
+              <div>
+                <label className="block text-sm text-surface-200 mb-2">送信までの猶予</label>
+                <ChoiceRow value={draft.partnerSendDelayMinutes ?? 5} options={DELAY_OPTIONS} onChange={(v) => update('partnerSendDelayMinutes', v)} />
+                <p className="text-xs text-surface-500 mt-1">「送る」を押してから実際に送るまでの時間。この間は「今日」画面の送信予定から取り消せます。</p>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm text-surface-200">一斉配信を片付ける</label>
+                  <p className="text-xs text-surface-500">宣伝・CFP・自動通知を既読にしてアーカイブへ(戻せます。IMAP 設定が必要)</p>
+                </div>
+                <Toggle value={draft.partnerAutoTidy ?? true} onChange={(v) => update('partnerAutoTidy', v)} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm text-surface-200">急ぎの新着を通知</label>
+                  <p className="text-xs text-surface-500">今日動くべき案件が見つかったら macOS の通知を出します</p>
+                </div>
+                <Toggle value={draft.partnerNotify ?? true} onChange={(v) => update('partnerNotify', v)} />
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm text-surface-200">ログイン時に起動</label>
+                  <p className="text-xs text-surface-500">Mac にログインしたら自動で起動し、裏で確認を続けます</p>
+                </div>
+                <Toggle value={draft.partnerLaunchAtLogin ?? false} onChange={(v) => update('partnerLaunchAtLogin', v)} />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm text-surface-200 mb-1">返事待ちとみなす日数</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={draft.partnerFollowUpDays ?? 4}
+                    onChange={(e) => update('partnerFollowUpDays', Math.max(1, Number(e.target.value)))}
+                    className={inputCls}
+                  />
+                  <p className="text-xs text-surface-500 mt-1">送ったきり返事が無いものを「返事待ち」に出します</p>
+                </div>
+              </div>
+            </div>
+
+            {/* アカウントの接続 */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <div>
+                  <span id="s-connect" className="block" /><label className="text-sm text-surface-200">アカウントの接続</label>
+                  <p className="text-xs text-surface-500">送信(SMTP)と片付け(IMAP)に使います。接続先は eM Client から取り込めるので、入れるのはパスワードだけです。</p>
+                </div>
+                <button
+                  onClick={discover}
+                  disabled={discovering}
+                  className="px-3 py-1.5 text-sm bg-surface-700 hover:bg-surface-600 text-surface-200 rounded transition-colors disabled:opacity-50 flex-shrink-0"
+                >
+                  {discovering ? '検出中…' : 'eM Client から検出'}
+                </button>
+              </div>
+              {discoverMsg && <p className="text-xs text-surface-400 mb-2">{discoverMsg}</p>}
+
+              {accounts.length === 0 && <p className="text-xs text-surface-500">アカウントが登録されていません(~/.config/shirabe/accounts.json)。</p>}
+
+              {accounts.map((account) => {
+                const email = account.email;
+                const imap = getImap(email);
+                const smtp = getSmtp(email);
+                const ic = imap?.credentials;
+                const sc = smtp?.credentials;
+                const ep = endpoints[email];
+                const isOAuth = ep ? ep.auth === 'oauth' : account.type === 'google';
+                const same = sameAsImap[email] ?? true;
+                const imapKey = `${email}:imap`;
+                const smtpKey = `${email}:smtp`;
+                const rImap = testResults[imapKey];
+                const rSmtp = testResults[smtpKey];
+                const imapOk = !!ic?.host && !!ic?.password;
+                const smtpOk = !!sc?.host && (same ? !!ic?.password : !!sc?.password);
+                return (
+                  <div key={email} className="mb-3 p-3 bg-surface-800 rounded border border-surface-700">
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="min-w-0">
+                        <span className="text-sm font-medium text-surface-200">{email}</span>
+                        <span className="text-xs text-surface-500 ml-2">{account.label}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[10px]">
+                        <span className={`px-1.5 py-px rounded border ${imapOk ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25' : 'bg-surface-900 text-surface-500 border-surface-700'}`}>片付け {imapOk ? '可' : '未設定'}</span>
+                        <span className={`px-1.5 py-px rounded border ${smtpOk ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25' : 'bg-surface-900 text-surface-500 border-surface-700'}`}>送信 {smtpOk ? '可' : '未設定'}</span>
+                      </div>
+                    </div>
+
+                    {isOAuth && (
+                      <div className="mb-2 p-2 rounded bg-amber-500/10 border border-amber-500/25 text-xs text-amber-200 leading-relaxed">
+                        Google アカウントは、Google の 2 段階認証を有効にしたうえで「アプリパスワード」を発行し、それをパスワード欄に入れてください。
+                        <button
+                          onClick={() => window.electronAPI.openExternalUrl('https://myaccount.google.com/apppasswords')}
+                          className="ml-1 text-accent-400 underline"
+                        >
+                          アプリパスワードを発行する
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="mb-2">
+                      <label className="block text-xs text-surface-400 mb-0.5">差出人の表示名</label>
+                      <input
+                        type="text"
+                        value={smtp?.displayName ?? ''}
+                        onChange={(e) => setSmtp(email, {}, { displayName: e.target.value })}
+                        className={smallInputCls}
+                        placeholder="例: SHIGENOBU Ryuto"
+                      />
+                    </div>
+
+                    {/* IMAP */}
+                    <div className="rounded border border-surface-700/70 p-2 mb-2">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-medium text-surface-300">IMAP(受信箱の片付け・隔離)</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => testConn(email, 'imap')}
+                            disabled={testingKey !== null || !imapOk}
+                            className="px-2 py-0.5 text-xs bg-surface-700 hover:bg-surface-600 text-surface-200 rounded disabled:opacity-50"
+                          >
+                            {testingKey === imapKey ? 'テスト中…' : 'IMAP テスト'}
+                          </button>
+                          {rImap && <span className={`text-xs ${rImap.success ? 'text-green-400' : 'text-red-400'}`}>{rImap.success ? '接続成功' : `失敗: ${rImap.error ?? ''}`}</span>}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-6 gap-2">
+                        <div className="col-span-3">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ホスト</label>
+                          <input type="text" value={ic?.host ?? getDefaultImapForAccount(email).host ?? ''} onChange={(e) => setImap(email, { host: e.target.value })} className={smallInputCls} placeholder="imap.example.com" />
+                        </div>
+                        <div className="col-span-1">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ポート</label>
+                          <input type="number" value={ic?.port ?? 993} onChange={(e) => setImap(email, { port: Number(e.target.value) })} className={smallInputCls} />
+                        </div>
+                        <div className="col-span-2 flex items-end">
+                          <label className="flex items-center gap-1.5 text-[11px] text-surface-400 pb-1.5">
+                            <input type="checkbox" checked={ic?.secure ?? true} onChange={(e) => setImap(email, { secure: e.target.checked })} className="accent-accent-500" />
+                            SSL/TLS
+                          </label>
+                        </div>
+                        <div className="col-span-3">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ユーザー</label>
+                          <input type="text" value={ic?.user ?? email} onChange={(e) => setImap(email, { user: e.target.value })} className={smallInputCls} />
+                        </div>
+                        <div className="col-span-3">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">パスワード</label>
+                          <div className="flex gap-1">
+                            <input
+                              type={showPassword[imapKey] ? 'text' : 'password'}
+                              value={ic?.password ?? ''}
+                              onChange={(e) => setImap(email, { password: e.target.value })}
+                              className={smallInputCls}
+                              placeholder={isOAuth ? 'アプリパスワード' : 'パスワード'}
+                            />
+                            <button onClick={() => setShowPassword((p) => ({ ...p, [imapKey]: !p[imapKey] }))} className="px-1.5 text-[10px] text-surface-500 hover:text-surface-300" title="表示/非表示">{showPassword[imapKey] ? '隠す' : '表示'}</button>
+                          </div>
+                        </div>
+                        <div className="col-span-6">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ゴミ箱フォルダ</label>
+                          <input type="text" value={imap?.trashFolderPath ?? 'Trash'} onChange={(e) => setImap(email, {}, { trashFolderPath: e.target.value })} className={smallInputCls} placeholder="Trash" />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* SMTP */}
+                    <div className="rounded border border-surface-700/70 p-2 mb-2">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-xs font-medium text-surface-300">SMTP(送信)</span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => testConn(email, 'smtp')}
+                            disabled={testingKey !== null || !smtpOk}
+                            className="px-2 py-0.5 text-xs bg-surface-700 hover:bg-surface-600 text-surface-200 rounded disabled:opacity-50"
+                          >
+                            {testingKey === smtpKey ? 'テスト中…' : 'SMTP テスト'}
+                          </button>
+                          {rSmtp && <span className={`text-xs ${rSmtp.success ? 'text-green-400' : 'text-red-400'}`}>{rSmtp.success ? '接続成功' : `失敗: ${rSmtp.error ?? ''}`}</span>}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-6 gap-2">
+                        <div className="col-span-3">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ホスト</label>
+                          <input type="text" value={sc?.host ?? getDefaultSmtpForAccount(email).host ?? ''} onChange={(e) => setSmtp(email, { host: e.target.value })} className={smallInputCls} placeholder="smtp.example.com" />
+                        </div>
+                        <div className="col-span-1">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ポート</label>
+                          <input type="number" value={sc?.port ?? getDefaultSmtpForAccount(email).port ?? 465} onChange={(e) => setSmtp(email, { port: Number(e.target.value) })} className={smallInputCls} />
+                        </div>
+                        <div className="col-span-2 flex items-end">
+                          <label className="flex items-center gap-1.5 text-[11px] text-surface-400 pb-1.5" title="ON = SSL/TLS(465)、OFF = STARTTLS(587)">
+                            <input type="checkbox" checked={sc?.secure ?? (getDefaultSmtpForAccount(email).secure ?? true)} onChange={(e) => setSmtp(email, { secure: e.target.checked })} className="accent-accent-500" />
+                            SSL/TLS
+                          </label>
+                        </div>
+                        <div className="col-span-3">
+                          <label className="block text-[10px] text-surface-500 mb-0.5">ユーザー</label>
+                          <input type="text" value={sc?.user ?? email} onChange={(e) => setSmtp(email, { user: e.target.value })} className={smallInputCls} />
+                        </div>
+                        <div className="col-span-3">
+                          <label className="flex items-center gap-1.5 text-[10px] text-surface-500 mb-0.5">
+                            <input
+                              type="checkbox"
+                              checked={same}
+                              onChange={(e) => {
+                                const v = e.target.checked;
+                                setSameAsImap((p) => ({ ...p, [email]: v }));
+                                if (v && ic?.password) setSmtp(email, { password: ic.password });
+                              }}
+                              className="accent-accent-500"
+                            />
+                            IMAP と同じパスワード
+                          </label>
+                          {!same && (
+                            <div className="flex gap-1">
+                              <input
+                                type={showPassword[smtpKey] ? 'text' : 'password'}
+                                value={sc?.password ?? ''}
+                                onChange={(e) => setSmtp(email, { password: e.target.value })}
+                                className={smallInputCls}
+                                placeholder={isOAuth ? 'アプリパスワード' : 'パスワード'}
+                              />
+                              <button onClick={() => setShowPassword((p) => ({ ...p, [smtpKey]: !p[smtpKey] }))} className="px-1.5 text-[10px] text-surface-500 hover:text-surface-300">{showPassword[smtpKey] ? '隠す' : '表示'}</button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs text-surface-400 mb-0.5">署名(送信時に本文の末尾へ付けます)</label>
+                      <textarea
+                        value={smtp?.signature ?? ''}
+                        onChange={(e) => setSmtp(email, {}, { signature: e.target.value })}
+                        rows={4}
+                        className={`${smallInputCls} font-mono leading-relaxed`}
+                        placeholder={'============================================\n福井大学 …\n============================================'}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 詳細 */}
+            <div className="rounded-lg border border-surface-700/60">
+              <button onClick={() => setAdvancedOpen((v) => !v)} className="w-full flex items-center gap-2 px-3 py-2 text-sm text-surface-300 hover:text-surface-100">
+                <span className={`text-[10px] transition-transform ${advancedOpen ? 'rotate-90' : ''}`}>▶</span>
+                詳細(モデル・上限・対象アカウント)
+              </button>
+              {advancedOpen && (
+                <div className="px-3 pb-3 space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">判定に使うモデル</label>
+                      <select value={draft.butlerModel} onChange={(e) => update('butlerModel', e.target.value as ButlerModel)} className={inputCls}>
+                        <option value="haiku">Haiku(速い・粗い)</option>
+                        <option value="sonnet">Sonnet(推奨)</option>
+                        <option value="opus">Opus(最も丁寧・遅い)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">下書きに使うモデル</label>
+                      <select value={draft.butlerDraftModel} onChange={(e) => update('butlerDraftModel', e.target.value as ButlerModel)} className={inputCls}>
+                        <option value="haiku">Haiku</option>
+                        <option value="sonnet">Sonnet(推奨)</option>
+                        <option value="opus">Opus(最も自然)</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">初回に遡る日数</label>
+                      <input type="number" min={1} max={90} value={draft.butlerInitialDays} onChange={(e) => update('butlerInitialDays', Math.max(1, Number(e.target.value)))} className={inputCls} />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">1回の判定上限(案件)</label>
+                      <input type="number" min={5} step={5} value={draft.butlerMaxCasesPerRun} onChange={(e) => update('butlerMaxCasesPerRun', Math.max(5, Number(e.target.value)))} className={inputCls} />
+                    </div>
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">1回の下書き上限(通)</label>
+                      <input type="number" min={0} value={draft.butlerMaxDraftsPerRun} onChange={(e) => update('butlerMaxDraftsPerRun', Math.max(0, Number(e.target.value)))} className={inputCls} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-surface-500 -mt-2">2回目以降は前回の確認以降の新着だけを読みます。上限を超えた案件は次回に回します。</p>
+                  <div>
+                    <label className="block text-sm text-surface-200 mb-1">対象アカウント</label>
+                    <p className="text-xs text-surface-500 mb-2">相棒に任せるアカウント。仕事用だけ選べば、プライベートは手動のままになります。全部チェック＝選択中の全アカウント。</p>
+                    <div className="space-y-1.5">
+                      {accounts.filter((a) => draft.selectedAccounts.includes(a.email)).map((account) => (
+                        <label key={account.email} className="flex items-center gap-2 text-sm cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={draft.butlerAccounts.length === 0 || draft.butlerAccounts.includes(account.email)}
+                            onChange={() => toggleButlerAccount(account.email)}
+                            className="accent-accent-500"
+                          />
+                          <span className="text-surface-300">{account.email}</span>
+                        </label>
+                      ))}
+                      {accounts.filter((a) => draft.selectedAccounts.includes(a.email)).length === 0 && (
+                        <p className="text-xs text-surface-500">先に「アカウント」セクションで対象を選択してください。</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">迷惑メールの隔離先フォルダ</label>
+                      <input type="text" value={draft.butlerQuarantineFolder} onChange={(e) => update('butlerQuarantineFolder', e.target.value)} className={inputCls} placeholder="隔離" />
+                      <p className="text-xs text-surface-500 mt-1">移動なので元に戻せます</p>
+                    </div>
+                    <div>
+                      <label className="block text-sm text-surface-200 mb-1">1回あたりの処理上限(件 / アカウント)</label>
+                      <input type="number" min={1} step={10} value={draft.butlerMaxPerAccount} onChange={(e) => update('butlerMaxPerAccount', Math.max(1, Number(e.target.value)))} className={inputCls} />
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between pt-2 border-t border-surface-700/50">
+                    <div>
+                      <label className="text-sm text-surface-200">相棒を止める</label>
+                      <p className="text-xs text-surface-500">自動確認・片付け・下書きをすべて止めます(手動の「今すぐ確認」はできます)</p>
+                    </div>
+                    <Toggle value={!draft.butlerEnabled} onChange={(v) => update('butlerEnabled', !v)} />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* 相棒に教える */}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span id="s-teach" className="block" /><label className="text-sm text-surface-200">相棒に教える</label>
+                <div className="flex items-center gap-2">
+                  {profileSaved && <span className="text-xs text-green-400">保存しました</span>}
+                  <button
+                    onClick={saveProfile}
+                    disabled={profileSaving || !profile || profileDraft === profile.content}
+                    className="px-3 py-1 text-xs bg-surface-700 hover:bg-surface-600 text-surface-200 rounded transition-colors disabled:opacity-50"
+                  >
+                    {profileSaving ? '保存中…' : '保存'}
+                  </button>
+                </div>
+              </div>
+              <p className="text-xs text-surface-500 mb-2">人物像・判断ルール・よくある相手。ここに書いたことは毎回の判定に使われます。</p>
+              <textarea
+                value={profileDraft}
+                onChange={(e) => setProfileDraft(e.target.value)}
+                rows={10}
+                className={`${inputCls} font-mono text-xs leading-relaxed`}
+                placeholder={'## 人物像と判断スタイル\n- 即対応する相手: …\n- 辞退する傾向: …\n- 定型文: …'}
+              />
+              <p className="text-[11px] text-surface-500 mt-1">
+                参照中: {profile?.sources?.length ? profile.sources.join(', ') : '(既定の人物像のみ)'}
+                {profile?.path && <span className="text-surface-600"> — {profile.path}</span>}
+              </p>
+            </div>
+          </div>
+        </section>
+
         {/* ─── General ─── */}
-        <section>
+        <section id="s-general">
           <SectionHeader title="一般" />
           <div className="space-y-4">
             <div>
@@ -202,7 +795,7 @@ export default function SettingsView() {
                   min={0}
                   value={draft.refreshIntervalMinutes}
                   onChange={(e) => update('refreshIntervalMinutes', Number(e.target.value))}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
+                  className={inputCls}
                 />
               </div>
               <div>
@@ -212,7 +805,7 @@ export default function SettingsView() {
                   min={1}
                   value={draft.mailDaysBack}
                   onChange={(e) => update('mailDaysBack', Number(e.target.value))}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
+                  className={inputCls}
                 />
               </div>
             </div>
@@ -223,7 +816,7 @@ export default function SettingsView() {
                 type="text"
                 value={draft.googleCalendarUrl}
                 onChange={(e) => update('googleCalendarUrl', e.target.value)}
-                className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
+                className={inputCls}
                 placeholder="メールアドレス or embed URL"
               />
               <p className="text-xs text-surface-500 mt-1">
@@ -235,7 +828,7 @@ export default function SettingsView() {
 
         {/* ─── Accounts ─── */}
         {accounts.length > 0 && (
-          <section>
+          <section id="s-accounts">
             <SectionHeader title="アカウント" />
             <div className="space-y-1.5">
               {accounts.map((account) => (
@@ -254,128 +847,8 @@ export default function SettingsView() {
           </section>
         )}
 
-        {/* IMAP settings per account */}
-        <section>
-          <SectionHeader title="IMAP設定" />
-          <p className="text-xs text-surface-500 mb-3">
-            ゴミメールをIMAPサーバーから削除するには、各アカウントのIMAP認証情報を設定してください。
-          </p>
-
-          {accounts.map((account) => {
-            const config = getImapConfig(account.email);
-            const creds = config?.credentials;
-            const isGoogle = account.type === 'google';
-            const isTestingThis = testingAccount === account.email;
-
-            return (
-              <div key={account.email} className="mb-4 p-3 bg-surface-800 rounded border border-surface-700">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-surface-200">{account.email}</span>
-                  <span className="text-xs text-surface-500">{account.label}</span>
-                </div>
-
-                {isGoogle && (
-                  <p className="text-xs text-yellow-400 mb-2">
-                    Googleアカウントはアプリパスワードが必要です:{' '}
-                    <span className="text-blue-400 underline cursor-pointer"
-                      onClick={() => window.open?.('https://myaccount.google.com/apppasswords')}>
-                      アプリパスワード設定
-                    </span>
-                  </p>
-                )}
-
-                <div className="grid grid-cols-2 gap-2 mb-2">
-                  <div>
-                    <label className="block text-xs text-surface-400 mb-0.5">ホスト</label>
-                    <input
-                      type="text"
-                      value={creds?.host ?? (isGoogle ? 'imap.gmail.com' : '')}
-                      onChange={(e) => updateImapCredential(account.email, 'host', e.target.value)}
-                      className="w-full px-2 py-1 text-xs bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                      placeholder="imap.example.com"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-surface-400 mb-0.5">ポート</label>
-                    <input
-                      type="number"
-                      value={creds?.port ?? 993}
-                      onChange={(e) => updateImapCredential(account.email, 'port', Number(e.target.value))}
-                      className="w-full px-2 py-1 text-xs bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 mb-2">
-                  <div>
-                    <label className="block text-xs text-surface-400 mb-0.5">ユーザー</label>
-                    <input
-                      type="text"
-                      value={creds?.user ?? account.email}
-                      onChange={(e) => updateImapCredential(account.email, 'user', e.target.value)}
-                      className="w-full px-2 py-1 text-xs bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs text-surface-400 mb-0.5">パスワード</label>
-                    <input
-                      type="password"
-                      value={creds?.password ?? ''}
-                      onChange={(e) => updateImapCredential(account.email, 'password', e.target.value)}
-                      className="w-full px-2 py-1 text-xs bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                      placeholder={isGoogle ? 'アプリパスワード' : 'パスワード'}
-                    />
-                  </div>
-                </div>
-
-                <div className="mb-2">
-                  <label className="block text-xs text-surface-400 mb-0.5">ゴミ箱フォルダ</label>
-                  <input
-                    type="text"
-                    value={config?.trashFolderPath ?? 'Trash'}
-                    onChange={(e) => updateImapConfig(account.email, { trashFolderPath: e.target.value })}
-                    className="w-full px-2 py-1 text-xs bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-blue-500 text-white"
-                    placeholder="Trash"
-                  />
-                  {folders.length > 0 && isTestingThis && (
-                    <div className="flex flex-wrap gap-1 mt-1">
-                      {folders.filter((f) => /trash|ゴミ箱|junk|spam|deleted/i.test(f)).map((f) => (
-                        <button
-                          key={f}
-                          onClick={() => updateImapConfig(account.email, { trashFolderPath: f })}
-                          className="px-1.5 py-0.5 text-xs bg-surface-700 text-blue-400 rounded hover:bg-surface-600"
-                        >
-                          {f}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => handleTestConnection(account.email)}
-                    disabled={testing || !creds?.host || !creds?.password}
-                    className="px-2 py-1 text-xs bg-blue-600 hover:bg-blue-500 text-white rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    {isTestingThis && testing ? 'テスト中...' : '接続テスト'}
-                  </button>
-                  {isTestingThis && testResult && (
-                    <span className={`text-xs ${testResult.success ? 'text-green-400' : 'text-red-400'}`}>
-                      {testResult.success ? '接続成功' : `失敗: ${testResult.error}`}
-                    </span>
-                  )}
-                  {isTestingThis && foldersLoading && (
-                    <span className="text-xs text-surface-400">フォルダ取得中...</span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </section>
-
         {/* ─── AI / Agent ─── */}
-        <section>
+        <section id="s-ai">
           <SectionHeader title="AI / エージェント" />
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -393,7 +866,7 @@ export default function SettingsView() {
                   type="password"
                   value={draft.apiKey}
                   onChange={(e) => update('apiKey', e.target.value)}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
+                  className={inputCls}
                   placeholder="sk-..."
                 />
               </div>
@@ -416,7 +889,7 @@ export default function SettingsView() {
                   step={0.1}
                   value={draft.maxBudgetUsd}
                   onChange={(e) => update('maxBudgetUsd', Number(e.target.value))}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
+                  className={inputCls}
                 />
               </div>
               <div>
@@ -425,7 +898,7 @@ export default function SettingsView() {
                   type="text"
                   value={draft.projectFolderPath}
                   onChange={(e) => update('projectFolderPath', e.target.value)}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white"
+                  className={inputCls}
                   placeholder="/path/to/project"
                 />
               </div>
@@ -433,217 +906,8 @@ export default function SettingsView() {
           </div>
         </section>
 
-        {/* ─── Night Butler ─── */}
-        <section>
-          <SectionHeader title="🌙 夜間執事（自動メール処理）" />
-          <div className="space-y-4">
-            {/* Safety line — 先生の安心のため必ず明記 */}
-            <div className="p-3 bg-accent-500/10 border border-accent-500/30 rounded text-xs text-surface-300 leading-relaxed">
-              新着メールを案件ごとに読み、「何をすべきか・期限・優先度」を判定して返信下書きと朝の申し送りを用意します。
-              タグ付け・下書き作成は自動で行います（すべて取り消せます）。
-              <span className="text-accent-400 font-medium">メールの削除と返信の送信は、必ずあなたの承認を求めます。</span>
-              <br />AI判定は Claude Code CLI 経由で動くため、Claude Code にログイン済みなら API キーは不要です。
-            </div>
-
-            {/* 1. Enable toggle */}
-            <div className="flex items-center justify-between">
-              <div>
-                <label className="text-sm text-surface-200">夜間執事を有効にする</label>
-                <p className="text-xs text-surface-500">新着メールを自動で仕分け・タグ付け・下書き準備します</p>
-              </div>
-              <Toggle value={draft.butlerEnabled} onChange={(v) => update('butlerEnabled', v)} />
-            </div>
-
-            {/* 2-5 are dimmed/disabled when butler is off */}
-            <div className={`space-y-4 transition-opacity ${draft.butlerEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
-              {/* 2. Schedule */}
-              <div>
-                <label className="block text-sm text-surface-200 mb-2">実行タイミング</label>
-                <div className="flex flex-wrap gap-2">
-                  {([
-                    { value: 'startup' as ButlerSchedule, label: '起動時' },
-                    { value: 'hourly' as ButlerSchedule, label: '1時間ごと' },
-                    { value: 'daily' as ButlerSchedule, label: '毎日' },
-                    { value: 'manual' as ButlerSchedule, label: '手動のみ' },
-                  ]).map((opt) => (
-                    <button
-                      key={opt.value}
-                      disabled={!draft.butlerEnabled}
-                      onClick={() => update('butlerSchedule', opt.value)}
-                      className={`px-3 py-1.5 text-sm rounded transition-colors ${
-                        draft.butlerSchedule === opt.value
-                          ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30'
-                          : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* 3. Quarantine folder */}
-              <div>
-                <label className="block text-sm text-surface-200 mb-1">スパム隔離先フォルダ名</label>
-                <input
-                  type="text"
-                  value={draft.butlerQuarantineFolder}
-                  onChange={(e) => update('butlerQuarantineFolder', e.target.value)}
-                  disabled={!draft.butlerEnabled}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                  placeholder="隔離"
-                />
-                <p className="text-xs text-surface-500 mt-1">
-                  自動隔離したスパムをこのフォルダへ移動します（移動なので元に戻せます）
-                </p>
-              </div>
-
-              {/* 4. Auto-quarantine threshold */}
-              <div>
-                <label className="block text-sm text-surface-200 mb-1">
-                  自動隔離の信頼度しきい値
-                  <span className="ml-2 text-accent-400 font-mono">{draft.butlerAutoQuarantineThreshold.toFixed(2)}</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs text-surface-500 w-10">慎重</span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={1}
-                    step={0.05}
-                    value={draft.butlerAutoQuarantineThreshold}
-                    onChange={(e) => update('butlerAutoQuarantineThreshold', Number(e.target.value))}
-                    disabled={!draft.butlerEnabled}
-                    className="flex-1 accent-accent-500 h-1 disabled:cursor-not-allowed"
-                  />
-                  <span className="text-xs text-surface-500 w-10 text-right">積極</span>
-                </div>
-                <p className="text-xs text-surface-500 mt-1">
-                  この信頼度以上のスパムだけを自動隔離します。高いほど慎重（誤隔離が減ります）
-                </p>
-              </div>
-
-              {/* 5. モデル */}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-surface-200 mb-1">判定に使うモデル</label>
-                  <select
-                    value={draft.butlerModel}
-                    onChange={(e) => update('butlerModel', e.target.value as ButlerModel)}
-                    disabled={!draft.butlerEnabled}
-                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                  >
-                    <option value="haiku">Haiku（速い・粗い）</option>
-                    <option value="sonnet">Sonnet（推奨）</option>
-                    <option value="opus">Opus（最も丁寧・遅い）</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-surface-200 mb-1">返信下書きに使うモデル</label>
-                  <select
-                    value={draft.butlerDraftModel}
-                    onChange={(e) => update('butlerDraftModel', e.target.value as ButlerModel)}
-                    disabled={!draft.butlerEnabled}
-                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                  >
-                    <option value="haiku">Haiku</option>
-                    <option value="sonnet">Sonnet（推奨）</option>
-                    <option value="opus">Opus（最も自然）</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* 5b. 量の上限 */}
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-sm text-surface-200 mb-1">初回に遡る日数</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={90}
-                    value={draft.butlerInitialDays}
-                    onChange={(e) => update('butlerInitialDays', Math.max(1, Number(e.target.value)))}
-                    disabled={!draft.butlerEnabled}
-                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-surface-200 mb-1">1回の判定上限（案件）</label>
-                  <input
-                    type="number"
-                    min={5}
-                    step={5}
-                    value={draft.butlerMaxCasesPerRun}
-                    onChange={(e) => update('butlerMaxCasesPerRun', Math.max(5, Number(e.target.value)))}
-                    disabled={!draft.butlerEnabled}
-                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm text-surface-200 mb-1">1回の下書き上限（通）</label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={draft.butlerMaxDraftsPerRun}
-                    onChange={(e) => update('butlerMaxDraftsPerRun', Math.max(0, Number(e.target.value)))}
-                    disabled={!draft.butlerEnabled}
-                    className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                  />
-                </div>
-              </div>
-              <p className="text-xs text-surface-500 -mt-2">
-                2回目以降は前回の実行以降の新着だけを読みます。上限を超えた案件は次回に回します（1案件あたり数秒）。
-              </p>
-
-              {/* 6. 対象アカウント */}
-              <div>
-                <label className="block text-sm text-surface-200 mb-1">対象アカウント</label>
-                <p className="text-xs text-surface-500 mb-2">
-                  夜間執事に任せるアカウント。仕事用だけ選べば、プライベート（Gmail等）は手動のままになります。全部チェック＝選択中の全アカウント。
-                </p>
-                <div className="space-y-1.5">
-                  {accounts
-                    .filter((a) => draft.selectedAccounts.includes(a.email))
-                    .map((account) => (
-                      <label key={account.email} className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={draft.butlerAccounts.length === 0 || draft.butlerAccounts.includes(account.email)}
-                          onChange={() => toggleButlerAccount(account.email)}
-                          disabled={!draft.butlerEnabled}
-                          className="accent-accent-500"
-                        />
-                        <span className="text-surface-300">{account.email}</span>
-                      </label>
-                    ))}
-                  {accounts.filter((a) => draft.selectedAccounts.includes(a.email)).length === 0 && (
-                    <p className="text-xs text-surface-500">先に上の「アカウント」セクションで対象を選択してください。</p>
-                  )}
-                </div>
-              </div>
-
-              {/* 7. 1回あたりの処理上限 */}
-              <div>
-                <label className="block text-sm text-surface-200 mb-1">1回あたりの処理上限（件 / アカウント）</label>
-                <input
-                  type="number"
-                  min={1}
-                  step={10}
-                  value={draft.butlerMaxPerAccount}
-                  onChange={(e) => update('butlerMaxPerAccount', Math.max(1, Number(e.target.value)))}
-                  disabled={!draft.butlerEnabled}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white disabled:cursor-not-allowed"
-                />
-                <p className="text-xs text-surface-500 mt-1">
-                  一度に大量のメールを動かすとIMAPが詰まるため、アカウントごとにこの件数で区切ります。超過分は次回の実行で処理されます。
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-
         {/* ─── Mail Display ─── */}
-        <section>
+        <section id="s-mail">
           <SectionHeader title="メール表示" />
           <div className="space-y-4">
 
@@ -774,7 +1038,7 @@ export default function SettingsView() {
         </section>
 
         {/* ─── Filtering ─── */}
-        <section>
+        <section id="s-filter">
           <SectionHeader title="フィルタリング" />
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -798,7 +1062,7 @@ export default function SettingsView() {
                     update('junkWhitelistDomains', domains);
                   }}
                   rows={3}
-                  className="w-full px-3 py-1.5 text-sm bg-surface-700 border border-surface-600 rounded focus:outline-none focus:border-accent-500 text-white font-mono"
+                  className={`${inputCls} font-mono`}
                   placeholder="example.ac.jp&#10;.ac.jp&#10;example.com"
                 />
               </div>
@@ -815,7 +1079,7 @@ export default function SettingsView() {
         </section>
 
         {/* ─── App Update ─── */}
-        <section>
+        <section id="s-update">
           <SectionHeader title="アプリ更新" />
 
           {/* Update available banner (from auto-check or manual check) */}
@@ -903,6 +1167,7 @@ export default function SettingsView() {
           保存
         </button>
       </div>
+    </div>
     </div>
   );
 }

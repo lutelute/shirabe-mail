@@ -428,3 +428,218 @@ export function getSentExemplars(accountEmail: string, n = 3): string[] {
     db.close();
   }
 }
+
+// =====================================================================
+// v3 相棒: 返信に必要なヘッダ / 返事待ちスレッド / 署名と表示名の推定
+// =====================================================================
+
+export interface ReplyHeaders {
+  mailId: number;
+  messageId: string;
+  inReplyTo: string;
+  references: string;
+  subject: string;
+  date: Date;
+  from: MailAddress | null;
+  replyTo: MailAddress | null;
+  to: MailAddress[];
+  cc: MailAddress[];
+  body: string;           // 引用用(クリーン済み)
+}
+
+/** 返信ヘッダと引用本文。SMTP 送信時にスレッドを壊さないために使う */
+export function getReplyHeaders(accountEmail: string, mailId: number): ReplyHeaders | null {
+  const acc = findAccount(accountEmail);
+  const db = openDb(acc.accountUid, acc.mailSubdir, 'mail_index.dat');
+  try {
+    const row = db
+      .prepare('SELECT id, subject, date, messageId, inReplyTo, "references" AS refs FROM MailItems WHERE id = ?')
+      .get(mailId) as { id: number; subject: string; date: number; messageId: string | null; inReplyTo: string | null; refs: string | null } | undefined;
+    if (!row) return null;
+    const addrs = db.prepare('SELECT type, displayName, address FROM MailAddresses WHERE parentId = ?').all(mailId) as Array<{ type: number; displayName: string; address: string }>;
+    const pick = (t: number): MailAddress[] => addrs.filter((a) => a.type === t && a.address).map((a) => ({ displayName: a.displayName ?? '', address: a.address, type: t as AddressType }));
+    const from = pick(AddressType.From)[0] ?? null;
+    const replyTo = pick(AddressType.ReplyTo)[0] ?? null;
+    const messageId = row.messageId ?? '';
+    // References = 元の References + 元の Message-ID
+    const prevRefs = (row.refs ?? '').trim();
+    const references = [prevRefs, messageId].filter(Boolean).join(' ').trim();
+    const bodies = getMailBodies(accountEmail, [mailId], 4000);
+    return {
+      mailId,
+      messageId,
+      inReplyTo: messageId,
+      references,
+      subject: row.subject ?? '',
+      date: ticksToDate(row.date) ?? new Date(0),
+      from,
+      replyTo,
+      to: pick(AddressType.To),
+      cc: pick(AddressType.Cc),
+      body: bodies.get(mailId) ?? '',
+    };
+  } finally {
+    db.close();
+  }
+}
+
+export interface WaitingThread {
+  conversationId: string;
+  mailId: number;        // 先生の最後の送信
+  subject: string;
+  sentAt: Date;
+  to: MailAddress[];
+  cc: MailAddress[];
+  body: string;          // 先生が書いた本文(クリーン済み)
+  daysWaiting: number;
+  threadCount: number;
+}
+
+/**
+ * 「先生が最後に送って、それきり返事が無い」スレッド。
+ * 送信済みフォルダにある最新メッセージが minDays 以上前のもの。
+ */
+export function getWaitingThreads(accountEmail: string, opts: { minDays: number; maxDays?: number; limit?: number }): WaitingThread[] {
+  const acc = findAccount(accountEmail);
+  const folders = getFolderInfo(accountEmail);
+  if (folders.sentIds.size === 0) return [];
+  const mine = myAddresses();
+  const now = new Date();
+  const maxDays = opts.maxDays ?? 45;
+  const limit = opts.limit ?? 40;
+  const since = new Date(now.getTime() - maxDays * 86_400_000);
+  const until = new Date(now.getTime() - Math.max(1, opts.minDays) * 86_400_000);
+  const db = openDb(acc.accountUid, acc.mailSubdir, 'mail_index.dat');
+  try {
+    const sentList = [...folders.sentIds].join(',');
+    const rows = db
+      .prepare(
+        `WITH conv AS (
+           SELECT conversationId, MAX(date) AS lastDate, COUNT(*) AS n
+           FROM MailItems
+           WHERE (flags & 65536) = 0 AND conversationId IS NOT NULL AND conversationId != '' AND date >= ?
+           GROUP BY conversationId
+         )
+         SELECT m.id, m.conversationId, m.subject, m.date, c.n
+         FROM MailItems m JOIN conv c ON c.conversationId = m.conversationId AND c.lastDate = m.date
+         WHERE m.folder IN (${sentList}) AND m.date <= ? AND (m.flags & 65536) = 0
+         ORDER BY m.date DESC
+         LIMIT ?`,
+      )
+      .all(dateToTicks(since), dateToTicks(until), limit * 2) as Array<{ id: number; conversationId: string; subject: string; date: number; n: number }>;
+    const addrStmt = db.prepare('SELECT type, displayName, address FROM MailAddresses WHERE parentId = ?');
+    const out: WaitingThread[] = [];
+    const seen = new Set<string>();
+    for (const r of rows) {
+      if (seen.has(r.conversationId)) continue;
+      seen.add(r.conversationId);
+      const addrs = addrStmt.all(r.id) as Array<{ type: number; displayName: string; address: string }>;
+      const to = addrs.filter((a) => a.type === AddressType.To && a.address && !mine.has(a.address.toLowerCase())).map((a): MailAddress => ({ displayName: a.displayName ?? '', address: a.address, type: AddressType.To }));
+      const cc = addrs.filter((a) => a.type === AddressType.Cc && a.address && !mine.has(a.address.toLowerCase())).map((a): MailAddress => ({ displayName: a.displayName ?? '', address: a.address, type: AddressType.Cc }));
+      if (to.length === 0) continue;                                  // 自分宛・宛先なしは除外
+      if (to.length + cc.length > 12) continue;                       // 一斉送信は返事待ちにしない
+      if (/^\s*(fw|fwd|転送)[:：]/i.test(r.subject ?? '') && to.length > 3) continue;
+      const sentAt = ticksToDate(r.date) ?? new Date(0);
+      out.push({
+        conversationId: r.conversationId,
+        mailId: r.id,
+        subject: r.subject ?? '',
+        sentAt,
+        to,
+        cc,
+        body: '',
+        daysWaiting: Math.floor((now.getTime() - sentAt.getTime()) / 86_400_000),
+        threadCount: r.n,
+      });
+      if (out.length >= limit) break;
+    }
+    const bodies = getMailBodies(accountEmail, out.map((w) => w.mailId), 1200);
+    for (const w of out) w.body = bodies.get(w.mailId) ?? '';
+    return out;
+  } finally {
+    db.close();
+  }
+}
+
+const SIG_BOUNDARY_RE = /^([=＝]{8,}|[-－]{8,}|[_＿]{8,}|[*＊]{8,}|-- ?)\s*$/;
+
+/** 本文(生)から署名ブロックを切り出す(無ければ '') */
+export function extractSignature(raw: string): string {
+  if (!raw) return '';
+  const lines = raw.replace(/\r/g, '').split('\n').map((l) => l.replace(/\s+$/g, ''));
+  // 引用より前だけ見る
+  const cut = lines.findIndex((l) => /^>/.test(l.trim()) || /^-{2,}\s*(元のメッセージ|Original Message)/i.test(l.trim()) || /^On .{6,120} wrote:\s*$/i.test(l.trim()));
+  const own = cut >= 0 ? lines.slice(0, cut) : lines;
+  // 末尾側から境界線を探す
+  for (let i = own.length - 1; i >= 0; i -= 1) {
+    if (!SIG_BOUNDARY_RE.test(own[i].trim())) continue;
+    // 同じ境界線で挟まれた塊(==== ... ====)か、境界線以降の塊
+    const after = own.slice(i).join('\n').trim();
+    if (after.length >= 30 && after.length <= 700) {
+      // 上側にも同じ境界線があればそこから
+      for (let j = i - 1; j >= Math.max(0, i - 12); j -= 1) {
+        if (own[j].trim() === own[i].trim()) return own.slice(j).join('\n').trim();
+      }
+      return after;
+    }
+  }
+  return '';
+}
+
+/** 最近の送信メールから署名を推定(最頻出) */
+export function guessSignature(accountEmail: string): string {
+  const acc = findAccount(accountEmail);
+  const folders = getFolderInfo(accountEmail);
+  if (folders.sentIds.size === 0) return '';
+  const db = openDb(acc.accountUid, acc.mailSubdir, 'mail_index.dat');
+  let ids: number[] = [];
+  try {
+    ids = (db.prepare(`SELECT id FROM MailItems WHERE folder IN (${[...folders.sentIds].join(',')}) AND (flags & 65536) = 0 ORDER BY date DESC LIMIT 40`).all() as Array<{ id: number }>).map((r) => r.id);
+  } finally {
+    db.close();
+  }
+  if (ids.length === 0) return '';
+  const fti = openReadonlyOrNull(acc.accountUid, acc.mailSubdir, 'mail_fti.dat');
+  if (!fti) return '';
+  const counts = new Map<string, { n: number; text: string }>();
+  try {
+    const stmt = fti.prepare('SELECT c1partName AS partName, c2content AS content FROM LocalMailsIndex3_content WHERE c0id = ?');
+    for (const id of ids) {
+      let rows: Array<{ partName: string; content: string }> = [];
+      try { rows = stmt.all(id) as Array<{ partName: string; content: string }>; } catch { continue; }
+      const pick = rows.find((r) => ['TEXT', '1', '1.1'].includes(r.partName)) ?? rows[0];
+      const sig = extractSignature(pick?.content ?? '');
+      if (!sig) continue;
+      const key = sig.replace(/\s+/g, ' ');
+      const cur = counts.get(key) ?? { n: 0, text: sig };
+      cur.n += 1;
+      counts.set(key, cur);
+    }
+  } finally {
+    fti.close();
+  }
+  let best: { n: number; text: string } | null = null;
+  for (const v of counts.values()) if (!best || v.n > best.n) best = v;
+  return best && best.n >= 2 ? best.text : '';
+}
+
+/** 先生が送信時に使っている表示名(最頻出) */
+export function getMyDisplayName(accountEmail: string): string {
+  const acc = findAccount(accountEmail);
+  const folders = getFolderInfo(accountEmail);
+  if (folders.sentIds.size === 0) return '';
+  const db = openDb(acc.accountUid, acc.mailSubdir, 'mail_index.dat');
+  try {
+    const row = db
+      .prepare(
+        `SELECT a.displayName AS name, COUNT(*) AS n FROM MailItems m
+         JOIN MailAddresses a ON a.parentId = m.id AND a.type = ${AddressType.From}
+         WHERE m.folder IN (${[...folders.sentIds].join(',')}) AND a.displayName IS NOT NULL AND a.displayName != ''
+         GROUP BY a.displayName ORDER BY n DESC LIMIT 1`,
+      )
+      .get() as { name: string } | undefined;
+    return (row?.name ?? '').replace(/^"|"$/g, '');
+  } finally {
+    db.close();
+  }
+}

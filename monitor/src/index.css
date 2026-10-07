@@ -2,63 +2,113 @@
 @tailwind components;
 @tailwind utilities;
 
-/* === Theme: Dark (default) === */
+/* =====================================================================
+   調 — 「机の上の相棒」
+   意味トークン(paper / card / ink / hairline / primary / danger / warn / ok)と、
+   旧ビューが使う surface-* / accent-* の両方を同じパレットから出す。
+   :root = Dark、.theme-paper = Paper(既定)。
+   ===================================================================== */
+
 :root {
-  --surface-50:  #f4f5f7;
-  --surface-100: #e4e6eb;
-  --surface-200: #c9cdd6;
-  --surface-300: #a1a8b8;
-  --surface-400: #737d92;
-  --surface-500: #555e72;
-  --surface-600: #3d4556;
-  --surface-700: #2c3242;
-  --surface-800: #1e2230;
-  --surface-900: #14171f;
-  --surface-950: #0d0f14;
-  --accent-50:  #eff6ff;
-  --accent-100: #dbeafe;
-  --accent-200: #bfdbfe;
-  --accent-300: #93c5fd;
-  --accent-400: #60a5fa;
-  --accent-500: #3b82f6;
-  --accent-600: #2563eb;
-  --accent-700: #1d4ed8;
-  --scrollbar-thumb: #3d4556;
-  --scrollbar-thumb-hover: #555e72;
+  /* --- 意味トークン(Dark) --- */
+  --paper: #15171B;
+  --card: #1E2126;
+  --card-2: #252930;
+  --ink: #E8E6E1;
+  --ink-2: #9AA0A8;
+  --ink-3: #6B7078;
+  --hairline: #2C3036;
+  --hairline-2: #3A3F47;
+  --primary: #7FB0E0;
+  --primary-hover: #93BEE6;
+  --primary-ink: #0F1A26;
+  --primary-soft: rgba(127, 176, 224, 0.14);
+  --danger: #E07A5F;
+  --danger-soft: rgba(224, 122, 95, 0.16);
+  --warn: #D6A443;
+  --warn-soft: rgba(214, 164, 67, 0.16);
+  --ok: #7CB98A;
+  --ok-soft: rgba(124, 185, 138, 0.16);
+  --focus-ring: rgba(127, 176, 224, 0.45);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.35);
+
+  /* --- 互換: surface-* (明→暗ではなく「役割」順: 950=地, 900=カード, 800=塗り, 700=罫線 …) --- */
+  --surface-950: #15171B;
+  --surface-900: #1E2126;
+  --surface-800: #262A30;
+  --surface-700: #2C3036;
+  --surface-600: #3A3F47;
+  --surface-500: #6B7078;
+  --surface-400: #9AA0A8;
+  --surface-300: #C2C6CC;
+  --surface-200: #D8DBDF;
+  --surface-100: #E8E6E1;
+  --surface-50:  #F4F3F0;
+  --accent-50:  #0F1A26;
+  --accent-100: #1B2E42;
+  --accent-200: #4A80AE;
+  --accent-300: #5E96CC;
+  --accent-400: #7FB0E0;
+  --accent-500: #5E96CC;
+  --accent-600: #1B2E42;
+  --accent-700: #0F1A26;
+  --scrollbar-thumb: #3A3F47;
+  --scrollbar-thumb-hover: #4B515A;
   color-scheme: dark;
 }
 
-/* === Theme: Paper === */
 .theme-paper {
-  --surface-50:  #1e1a16;
-  --surface-100: #302b24;
-  --surface-200: #4d4840;
-  --surface-300: #736d62;
-  --surface-400: #948d82;
-  --surface-500: #aba49a;
-  --surface-600: #d4d2cc;
-  --surface-700: #e0ded8;
-  --surface-800: #eae8e3;
-  --surface-900: #f2f0eb;
-  --surface-950: #faf8f5;
-  --accent-50:  #1d3461;
-  --accent-100: #1d4e8a;
-  --accent-200: #2563a8;
-  --accent-300: #2d74b8;
-  --accent-400: #2b6cb0;
-  --accent-500: #2563a0;
-  --accent-600: #dbeafe;
-  --accent-700: #eff6ff;
-  --scrollbar-thumb: #d4d2cc;
-  --scrollbar-thumb-hover: #bab8b2;
+  /* --- 意味トークン(Paper) --- */
+  --paper: #F6F3EC;
+  --card: #FFFFFF;
+  --card-2: #FBF9F5;
+  --ink: #1F2328;
+  --ink-2: #5F6670;
+  --ink-3: #8A8F98;
+  --hairline: #E4DED2;
+  --hairline-2: #D2CBBD;
+  --primary: #2F5D8A;
+  --primary-hover: #264C72;
+  --primary-ink: #FFFFFF;
+  --primary-soft: rgba(47, 93, 138, 0.10);
+  --danger: #C8502E;
+  --danger-soft: rgba(200, 80, 46, 0.10);
+  --warn: #B7791F;
+  --warn-soft: rgba(183, 121, 31, 0.12);
+  --ok: #3E7D4B;
+  --ok-soft: rgba(62, 125, 75, 0.12);
+  --focus-ring: rgba(47, 93, 138, 0.35);
+  --shadow: 0 1px 2px rgba(31, 35, 40, 0.06), 0 8px 24px rgba(31, 35, 40, 0.08);
+
+  --surface-950: #F6F3EC;
+  --surface-900: #FFFFFF;
+  --surface-800: #F2EFE8;
+  --surface-700: #E4DED2;
+  --surface-600: #D2CBBD;
+  --surface-500: #8A8F98;
+  --surface-400: #5F6670;
+  --surface-300: #3F454D;
+  --surface-200: #2B3036;
+  --surface-100: #1F2328;
+  --surface-50:  #15181C;
+  --accent-50:  #ECF2F8;
+  --accent-100: #D9E6F2;
+  --accent-200: #4A80AE;
+  --accent-300: #3B6F9F;
+  --accent-400: #2F5D8A;
+  --accent-500: #2F5D8A;
+  --accent-600: #D9E6F2;
+  --accent-700: #ECF2F8;
+  --scrollbar-thumb: #D2CBBD;
+  --scrollbar-thumb-hover: #BDB5A5;
   color-scheme: light;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar { width: 6px; }
+/* --- 基本 --- */
+::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); background-clip: padding-box; }
 
 html, body, #root {
   height: 100%;
@@ -67,115 +117,77 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Hiragino Sans', system-ui, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: 'Hiragino Sans', 'Hiragino Kaku Gothic ProN', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.65;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'palt' 1;
 }
 
-/* Selection */
-::selection {
-  background: rgba(59, 130, 246, 0.3);
-}
+.tnum { font-variant-numeric: tabular-nums; }
 
-/* Paper theme overrides */
-.theme-paper {
-  color: #302b24;
-}
+::selection { background: var(--primary-soft); }
 
-/* Override hardcoded text-white in paper theme */
-.theme-paper .text-white {
-  color: #1e1a16 !important;
-}
+/* ウィンドウのドラッグ領域(titleBarStyle: hiddenInset) */
+.app-drag { -webkit-app-region: drag; }
+.app-no-drag { -webkit-app-region: no-drag; }
 
-/* Override bg-white elements to be slightly warmer */
-.theme-paper .bg-white {
-  background-color: #fdfcfa !important;
-}
+/* フォーカスリング(キーボード操作) */
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; border-radius: 6px; }
+button:focus:not(:focus-visible), input:focus:not(:focus-visible), textarea:focus:not(:focus-visible) { outline: none; }
 
-/* Fix blue/accent buttons in paper theme */
-.theme-paper .bg-blue-500,
-.theme-paper .bg-blue-600 {
-  color: #fff !important;
-}
-.theme-paper .bg-blue-500 .text-white,
-.theme-paper .bg-blue-600 .text-white,
-.theme-paper .bg-blue-500.text-white,
-.theme-paper .bg-blue-600.text-white,
-.theme-paper .bg-red-500 .text-white,
-.theme-paper .bg-red-500.text-white {
-  color: #fff !important;
-}
+/* 申し送り: 同僚からのメモの読み味 */
+.brief-text { font-size: 15px; line-height: 1.8; letter-spacing: 0.01em; }
 
-/* Badge text stays white on colored backgrounds */
-.theme-paper .bg-blue-500.text-white,
-.theme-paper .bg-accent-500.text-white,
-.theme-paper .rounded-full.bg-blue-500 {
-  color: #fff !important;
-}
+/* 下書きエディタ・本文 */
+.draft-text { font-size: 13px; line-height: 1.75; }
+textarea.draft-editor { resize: none; overflow: hidden; }
 
-.theme-paper ::selection {
-  background: rgba(37, 99, 160, 0.2);
-}
+/* アイコンレールのツールチップ */
+.rail-tip { pointer-events: none; opacity: 0; transform: translateX(-4px); transition: opacity .12s ease, transform .12s ease; }
+.rail-item:hover .rail-tip, .rail-item:focus-visible .rail-tip { opacity: 1; transform: translateX(0); }
 
-/* Checkbox appearance in paper theme */
-.theme-paper input[type="checkbox"] {
-  border-color: #bab8b2;
-  background-color: #faf8f5;
-}
+/* 行の優先度バー */
+.prio-bar { width: 3px; border-radius: 2px; align-self: stretch; }
 
-/* Paper theme shadow for depth */
-.theme-paper {
-  --tw-shadow-color: rgba(0, 0, 0, 0.06);
-}
-
-/* --- Paper theme: fix low-contrast text colors --- */
-
-/* Orange / amber text → darker for readability on light bg */
-.theme-paper .text-orange-300 { color: #c2410c !important; }  /* orange-700 */
-.theme-paper .text-orange-400 { color: #c2410c !important; }
-.theme-paper .text-amber-200  { color: #92400e !important; }  /* amber-800 */
-.theme-paper .text-amber-300  { color: #b45309 !important; }  /* amber-700 */
-.theme-paper .text-amber-400  { color: #b45309 !important; }
-
-/* Red text → darker */
-.theme-paper .text-red-400    { color: #b91c1c !important; }  /* red-700 */
-.theme-paper .text-red-500    { color: #991b1b !important; }  /* red-800 */
-
-/* Green / emerald text → darker */
-.theme-paper .text-green-400  { color: #15803d !important; }  /* green-700 */
-.theme-paper .text-emerald-300 { color: #047857 !important; } /* emerald-700 */
-.theme-paper .text-emerald-400 { color: #047857 !important; }
-
-/* Purple / violet text → darker */
-.theme-paper .text-purple-400 { color: #7e22ce !important; }  /* purple-700 */
-.theme-paper .text-purple-500 { color: #6b21a8 !important; }  /* purple-800 */
-.theme-paper .text-violet-400 { color: #6d28d9 !important; }  /* violet-700 */
-
-/* Sky / teal / cyan / pink / rose text → darker */
-.theme-paper .text-sky-400    { color: #0369a1 !important; }  /* sky-700 */
-.theme-paper .text-teal-400   { color: #0f766e !important; }  /* teal-700 */
-.theme-paper .text-cyan-400   { color: #0e7490 !important; }  /* cyan-700 */
-.theme-paper .text-pink-400   { color: #be185d !important; }  /* pink-700 */
-.theme-paper .text-rose-400   { color: #be123c !important; }  /* rose-700 */
-
-/* Accent badge text in colored backgrounds → keep contrast */
-.theme-paper .text-accent-400 { color: #1d4e8a !important; }
-
-/* Tinted backgrounds → stronger opacity for light bg */
+/* --- Paper: 旧ビューで直書きされた色の読みやすさを担保 --- */
+.theme-paper .text-white { color: var(--ink) !important; }
+.theme-paper .bg-white { background-color: var(--card) !important; }
+.theme-paper .bg-blue-500, .theme-paper .bg-blue-600 { color: #fff !important; }
+.theme-paper .bg-blue-500 .text-white, .theme-paper .bg-blue-600 .text-white,
+.theme-paper .bg-blue-500.text-white, .theme-paper .bg-blue-600.text-white,
+.theme-paper .bg-red-500 .text-white, .theme-paper .bg-red-500.text-white,
+.theme-paper .bg-accent-500.text-white, .theme-paper .rounded-full.bg-blue-500,
+.theme-paper .bg-primary.text-primary-ink, .theme-paper .bg-primary .text-primary-ink { color: #fff !important; }
+.theme-paper input[type="checkbox"] { border-color: var(--hairline-2); background-color: var(--card); }
+.theme-paper { --tw-shadow-color: rgba(0, 0, 0, 0.06); }
+.theme-paper .text-orange-300, .theme-paper .text-orange-400 { color: #c2410c !important; }
+.theme-paper .text-amber-200 { color: #92400e !important; }
+.theme-paper .text-amber-300, .theme-paper .text-amber-400 { color: #b45309 !important; }
+.theme-paper .text-red-300, .theme-paper .text-red-400 { color: #b91c1c !important; }
+.theme-paper .text-red-500 { color: #991b1b !important; }
+.theme-paper .text-green-400 { color: #15803d !important; }
+.theme-paper .text-emerald-300, .theme-paper .text-emerald-400 { color: #047857 !important; }
+.theme-paper .text-purple-400 { color: #7e22ce !important; }
+.theme-paper .text-purple-500 { color: #6b21a8 !important; }
+.theme-paper .text-violet-300, .theme-paper .text-violet-400 { color: #6d28d9 !important; }
+.theme-paper .text-sky-300, .theme-paper .text-sky-400 { color: #0369a1 !important; }
+.theme-paper .text-teal-400 { color: #0f766e !important; }
+.theme-paper .text-cyan-400 { color: #0e7490 !important; }
+.theme-paper .text-pink-400 { color: #be185d !important; }
+.theme-paper .text-rose-400 { color: #be123c !important; }
+.theme-paper .text-accent-400 { color: var(--primary) !important; }
 .theme-paper .bg-orange-500\/10 { background-color: rgba(249, 115, 22, 0.15) !important; }
 .theme-paper .bg-orange-500\/15 { background-color: rgba(249, 115, 22, 0.20) !important; }
-.theme-paper .bg-amber-500\/15  { background-color: rgba(245, 158, 11, 0.20) !important; }
-.theme-paper .bg-red-500\/10    { background-color: rgba(239, 68, 68, 0.15) !important; }
+.theme-paper .bg-amber-500\/15 { background-color: rgba(245, 158, 11, 0.20) !important; }
+.theme-paper .bg-red-500\/10 { background-color: rgba(239, 68, 68, 0.15) !important; }
 .theme-paper .bg-emerald-500\/15 { background-color: rgba(16, 185, 129, 0.18) !important; }
-.theme-paper .bg-purple-500\/5   { background-color: rgba(168, 85, 247, 0.10) !important; }
-.theme-paper .bg-purple-500\/20  { background-color: rgba(168, 85, 247, 0.25) !important; }
-.theme-paper .bg-purple-600\/80  { background-color: rgba(147, 51, 234, 0.90) !important; }
-
-/* Investigation / action button text-white overrides — keep white on colored bg */
-.theme-paper .bg-purple-600\/80 .text-white,
-.theme-paper .bg-purple-600\/80.text-white,
-.theme-paper .bg-purple-600.text-white,
-.theme-paper .bg-orange-600\/80 .text-white,
-.theme-paper .bg-orange-600\/80.text-white {
-  color: #fff !important;
-}
+.theme-paper .bg-purple-500\/5 { background-color: rgba(168, 85, 247, 0.10) !important; }
+.theme-paper .bg-purple-500\/20 { background-color: rgba(168, 85, 247, 0.25) !important; }
+.theme-paper .bg-purple-600\/80 { background-color: rgba(147, 51, 234, 0.90) !important; }
+.theme-paper .bg-purple-600\/80 .text-white, .theme-paper .bg-purple-600\/80.text-white,
+.theme-paper .bg-purple-600.text-white, .theme-paper .bg-orange-600\/80 .text-white,
+.theme-paper .bg-orange-600\/80.text-white { color: #fff !important; }

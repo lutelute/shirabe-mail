@@ -3,7 +3,26 @@ export default {
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ['Hiragino Sans', 'Hiragino Kaku Gothic ProN', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'system-ui', 'sans-serif'],
+      },
+      screens: {
+        wide: '1180px',
+      },
+      boxShadow: {
+        card: 'var(--shadow)',
+      },
       colors: {
+        // 意味トークン
+        paper: 'var(--paper)',
+        card: { DEFAULT: 'var(--card)', 2: 'var(--card-2)' },
+        ink: { DEFAULT: 'var(--ink)', 2: 'var(--ink-2)', 3: 'var(--ink-3)' },
+        hairline: { DEFAULT: 'var(--hairline)', 2: 'var(--hairline-2)' },
+        primary: { DEFAULT: 'var(--primary)', hover: 'var(--primary-hover)', ink: 'var(--primary-ink)', soft: 'var(--primary-soft)' },
+        danger: { DEFAULT: 'var(--danger)', soft: 'var(--danger-soft)' },
+        warn: { DEFAULT: 'var(--warn)', soft: 'var(--warn-soft)' },
+        ok: { DEFAULT: 'var(--ok)', soft: 'var(--ok-soft)' },
+        // 互換(旧ビュー)
         surface: {
           50:  'var(--surface-50)',
           100: 'var(--surface-100)',

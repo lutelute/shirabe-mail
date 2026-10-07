@@ -321,6 +321,7 @@ export interface ShirabeDigest {
 
 // === View Navigation ===
 export type ViewType =
+  | 'today'
   | 'shirabe'
   | 'mail'
   | 'calendar'
@@ -487,6 +488,16 @@ export interface AppSettings {
   butlerInitialDays: number;             // 初回実行で遡る日数(2回目以降は前回実行以降)
   butlerMaxCasesPerRun: number;          // 1回でAI判定する案件数の上限
   butlerMaxDraftsPerRun: number;         // 1回で用意する返信下書きの上限
+  // 相棒 v3
+  partnerMode: PartnerMode;              // 権限レベル
+  partnerIntervalMinutes: number;        // 自動実行の間隔(分)。0 = 手動のみ
+  partnerSendDelayMinutes: number;       // 「送る」から実際の送信までの猶予(取消可)
+  partnerAutoTidy: boolean;              // 一斉配信を既読+アーカイブで片付ける
+  partnerNotify: boolean;                // P1 の新着を macOS 通知
+  partnerLaunchAtLogin: boolean;         // ログイン時に起動(トレイ常駐)
+  partnerFollowUpDays: number;           // 返事待ちとみなす日数
+  partnerReferencesDir: string;          // 連絡先・判断ルールの場所(空=自動検出)
+  smtpConfigs: AccountSmtpConfig[];      // 送信設定(アカウントごと)
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -514,7 +525,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   senderColorMode: 'text',
   customTags: [],
   autoTagEnabled: false,
-  butlerEnabled: false,
+  butlerEnabled: true,
   butlerSchedule: 'startup',
   butlerQuarantineFolder: '隔離',
   butlerAutoQuarantineThreshold: 0.95,
@@ -526,6 +537,15 @@ export const DEFAULT_SETTINGS: AppSettings = {
   butlerInitialDays: 14,
   butlerMaxCasesPerRun: 50,
   butlerMaxDraftsPerRun: 5,
+  partnerMode: 'assist',
+  partnerIntervalMinutes: 30,
+  partnerSendDelayMinutes: 5,
+  partnerAutoTidy: true,
+  partnerNotify: true,
+  partnerLaunchAtLogin: false,
+  partnerFollowUpDays: 4,
+  partnerReferencesDir: '',
+  smtpConfigs: [],
 };
 
 // === Night Butler (自動パイプライン) ===
@@ -573,6 +593,8 @@ export interface NightlyDigest {
   groups?: ButlerGroup[];          // 一括承認グループ(スパム削除など)
   brief?: string;                  // 秘書の朝の一言(AI生成)
   stats?: ButlerStats;
+  sources?: string[];              // 判断に使った参照ファイル(表示用)
+  mode?: PartnerMode;              // 実行時の権限レベル
 }
 
 // === Night Butler v2: 案件(case)ベースの秘書モデル ===
@@ -581,7 +603,7 @@ export interface NightlyDigest {
 export type SenderTier = 'vip' | 'internal' | 'known' | 'auto' | 'unknown' | 'noise';
 export type ButlerCaseCategory = 'reply' | 'action' | 'fyi' | 'noise' | 'spam' | 'unknown';
 export type ButlerPriority = 'P1' | 'P2' | 'P3' | 'P4';
-export type ButlerCaseStatus = 'open' | 'done' | 'later' | 'dismissed';
+export type ButlerCaseStatus = 'open' | 'done' | 'later' | 'dismissed' | 'scheduled' | 'sent';
 
 export interface SenderStats {
   received: number;    // 期間内に受信した数
@@ -627,7 +649,46 @@ export interface ButlerCase {
   aiSource: 'ai' | 'rule' | 'fallback';
   createdAt: string;
   runAt: string;
+  // --- v3 相棒 ---
+  decision?: CaseDecision | null;   // 先生に聞くべき問い(答えると下書きが作れる)
+  replyKind?: ReplyKind;
+  autoSendSafe?: boolean;           // 定型で、先生の判断なしに送っても安全
+  replyScope?: 'sender' | 'all';    // 返信先: 差出人のみ / 全員
+  outboxId?: string;                // 送信予定に載せたときの id
+  sentAt?: string;
+  draftEdited?: boolean;            // 先生が下書きを手で直した
+  isRead?: boolean;                 // 先生が既に eM Client で開いた
+  handoff?: CaseHandoff | null;     // 作業への受け渡し(指示書・フォルダ)
+  event?: CaseEvent | null;         // メールに書かれた予定(会議・締切の日時)
+  calendarStatus?: 'registered' | 'missing' | 'unknown';  // eM Client のカレンダーにあるか
+  calendarMatch?: string;           // 一致した予定の件名
 }
+
+// メールから読み取った予定
+export interface CaseEvent {
+  title: string;
+  start: string;        // ISO8601(ローカル)。終日なら YYYY-MM-DD
+  end?: string | null;
+  allDay: boolean;
+  location?: string;
+  kind: 'meeting' | 'deadline' | 'event' | 'other';
+}
+
+// 案件 → 作業(ターミナル / FinderAI / フォルダ)への受け渡し
+export interface CaseHandoff {
+  folder: string | null;        // 作業フォルダ(絶対パス)。先生が変更できる
+  folderExists: boolean;
+  folderReason: string;
+  title: string;
+  instructions: string;         // 作業指示書(Markdown)
+  deliverable: string;
+  docPath: string;              // 指示書を書き出したファイル
+  preparedAt: string;
+  lastOpenedAt?: string;
+  lastTarget?: HandoffTarget;
+}
+
+export type HandoffTarget = 'terminal' | 'finderai' | 'folder';
 
 export interface ButlerGroupItem {
   mailId: number;
@@ -639,7 +700,7 @@ export interface ButlerGroupItem {
 // 一括承認グループ(不可逆な削除は必ずここを通す)
 export interface ButlerGroup {
   id: string;
-  kind: 'spam_delete' | 'noise_list';
+  kind: 'spam_delete' | 'noise_list' | 'tidied';
   label: string;
   reason: string;
   accountEmail: string;
@@ -647,6 +708,8 @@ export interface ButlerGroup {
   status: 'pending' | 'approved' | 'rejected' | 'failed';
   error?: string;
   createdAt: string;
+  archiveFolder?: string;   // kind 'tidied': 移した先(「戻す」に使う)
+  undone?: boolean;         // kind 'tidied': 戻した
 }
 
 export interface ButlerStats {
@@ -660,6 +723,11 @@ export interface ButlerStats {
   drafts: number;
   aiCalls: number;
   durationMs: number;
+  tidied?: number;     // 既読+アーカイブした数
+  scheduled?: number;  // 自動で送信予定に載せた数
+  followUps?: number;  // 返事待ちの件数
+  decisions?: number;  // 先生に聞く問いの数
+  calendarMissing?: number;  // カレンダー未登録の予定
 }
 
 // 学習ルール(先生の訂正で育つ)
@@ -671,6 +739,127 @@ export interface ButlerSenderRule {
 export interface ButlerRules {
   senders: Record<string, ButlerSenderRule>;  // address(lowercase) → rule
   domains: Record<string, ButlerSenderRule>;  // domain(lowercase) → rule
+}
+
+// === 相棒 v3 ===
+
+// 権限レベル: 見るだけ / 下書き・整理まで(送信は先生の1タップ) / 定型返信は任せる
+export type PartnerMode = 'observe' | 'assist' | 'delegate';
+
+export type ReplyKind = 'ack' | 'thanks' | 'schedule' | 'answer' | 'accept' | 'decline' | 'other';
+
+// 先生に聞くべき問い。answer が入ると下書きを作る
+export interface CaseDecision {
+  question: string;
+  options: string[];
+  answer?: string;
+  answeredAt?: string;
+}
+
+export interface SmtpCredentials {
+  host: string;
+  port: number;
+  secure: boolean;   // true = TLS(465) / false = STARTTLS(587)
+  user: string;
+  password: string;
+}
+
+export interface AccountSmtpConfig {
+  accountEmail: string;
+  credentials: SmtpCredentials | null;
+  displayName: string;   // From の表示名
+  signature: string;     // 本文末尾に付ける署名
+}
+
+// eM Client の設定から自動検出した接続先(パスワードは含まない)
+export interface AccountEndpoints {
+  accountEmail: string;
+  displayName: string;
+  provider: 'gmail' | 'generic';
+  auth: 'password' | 'oauth';   // oauth = Gmail。アプリパスワードが必要
+  imap: { host: string; port: number; secure: boolean; user: string } | null;
+  smtp: { host: string; port: number; secure: boolean; user: string } | null;
+  signature: string;            // 送信済みメールから推定(空あり)
+  sentFolder?: string;
+  archiveFolder?: string;
+  trashFolder?: string;
+}
+
+export type OutboxStatus = 'scheduled' | 'sending' | 'sent' | 'cancelled' | 'failed';
+
+// 遅延送信キューの1件。sendAt を過ぎたら main が送る。取消は sendAt まで可能
+export interface OutboxItem {
+  id: string;
+  kind: 'reply' | 'nudge' | 'new';
+  caseId?: string;
+  followUpId?: string;
+  accountEmail: string;
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;              // 署名・引用を除いた本文(送信時に付ける)
+  inReplyToMailId?: number;  // 元メール(eM Client の id)。返信ヘッダと引用に使う
+  label: string;             // 表示用「〇〇さんへ: 件名」
+  sendAt: string;
+  status: OutboxStatus;
+  error?: string;
+  createdAt: string;
+  sentAt?: string;
+  messageId?: string;
+  auto?: boolean;            // 相棒が自動で載せた(delegate)
+}
+
+export type FollowUpStatus = 'open' | 'nudged' | 'snoozed' | 'closed';
+
+// 先生が送って返事が無いスレッド
+export interface FollowUp {
+  id: string;                // `${accountEmail}::conv-${conversationId}`
+  accountEmail: string;
+  conversationId: string;
+  mailId: number;            // 先生の最後の送信メール
+  subject: string;
+  to: string;                // 表示用
+  toAddress: string;
+  sentAt: string;
+  daysWaiting: number;
+  ask: string;               // 先生が相手に求めたこと
+  summary: string;
+  nudgeDraft?: string;
+  status: FollowUpStatus;
+  snoozeUntil?: string;
+  outboxId?: string;
+  aiSource: 'ai' | 'rule';
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type JournalKind =
+  | 'run' | 'sent' | 'scheduled' | 'cancelled' | 'archived' | 'read' | 'quarantined'
+  | 'tagged' | 'decided' | 'nudged' | 'tidy_undone' | 'closed' | 'error';
+
+export interface JournalEntry {
+  at: string;
+  kind: JournalKind;
+  text: string;
+  caseId?: string;
+  mailId?: number;
+  accountEmail?: string;
+}
+
+// 「今日」画面が読む状態のまとまり
+export interface PartnerState {
+  digest: NightlyDigest | null;
+  outbox: OutboxItem[];
+  followUps: FollowUp[];
+  journal: JournalEntry[];      // 直近
+  running: boolean;
+  progress?: { stage: string; message: string; done?: number; total?: number } | null;
+  lastRunAt: string | null;
+  nextRunAt: string | null;
+  canSend: Record<string, boolean>;   // accountEmail → SMTP 設定済み
+  canTidy: Record<string, boolean>;   // accountEmail → IMAP 設定済み
+  mode: PartnerMode;
+  sources: string[];
 }
 
 // 承認アクション(UI → main)
@@ -798,6 +987,28 @@ export interface ElectronAPI {
   getButlerRules: () => Promise<ButlerRules>;
   generateCaseDraft: (params: { caseId: string; instruction?: string }) => Promise<{ status: string; draft?: string; error?: string }>;
   onButlerProgress: (callback: (progress: { stage: string; message: string; done?: number; total?: number }) => void) => () => void;
+  // 相棒 v3
+  partnerGetState: () => Promise<PartnerState>;
+  partnerRunNow: () => Promise<PartnerState>;
+  partnerSend: (params: { caseId: string; body?: string; delayMinutes?: number }) => Promise<{ status: string; outboxId?: string; fallback?: 'compose'; error?: string }>;
+  partnerCancelSend: (params: { outboxId: string }) => Promise<{ status: string; error?: string }>;
+  partnerSendNow: (params: { outboxId: string }) => Promise<{ status: string; error?: string }>;
+  partnerAnswerDecision: (params: { caseId: string; answer: string }) => Promise<{ status: string; draft?: string; error?: string }>;
+  partnerSaveDraft: (params: { caseId: string; body: string }) => Promise<{ status: string; error?: string }>;
+  partnerFollowUpAction: (params: { id: string; action: 'nudge' | 'snooze' | 'close' | 'draft'; body?: string; days?: number }) => Promise<{ status: string; outboxId?: string; draft?: string; error?: string }>;
+  partnerUndoTidy: (params: { groupId: string }) => Promise<{ status: string; restored?: number; error?: string }>;
+  partnerDiscoverAccounts: () => Promise<AccountEndpoints[]>;
+  partnerTestConnection: (params: { kind: 'imap' | 'smtp'; credentials: ImapCredentials | SmtpCredentials }) => Promise<{ success: boolean; error?: string }>;
+  partnerGetProfile: () => Promise<{ content: string; path: string; sources: string[] }>;
+  // 作業への受け渡し
+  partnerHandoffPrepare: (params: { caseId: string; instruction?: string }) => Promise<{ status: string; handoff?: CaseHandoff; error?: string }>;
+  partnerHandoffOpen: (params: { caseId: string; target: HandoffTarget }) => Promise<{ status: string; detail?: string; error?: string }>;
+  partnerPickFolder: (params: { caseId: string }) => Promise<{ status: string; folder?: string; error?: string }>;
+  partnerDraftToEmClient: (params: { caseId: string; body?: string }) => Promise<{ status: string; folder?: string; fallback?: 'compose'; error?: string }>;
+  // カレンダー
+  partnerAddToCalendar: (params: { caseId: string }) => Promise<{ status: string; path?: string; error?: string }>;
+  partnerSaveProfile: (content: string) => Promise<void>;
+  onPartnerState: (callback: (state: PartnerState) => void) => () => void;
 }
 
 declare global {

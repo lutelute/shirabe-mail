@@ -1,7 +1,7 @@
 {
   "name": "shirabe",
-  "version": "2.0.0",
-  "description": "調 - メール分析・AI分類デスクトップアプリ (eM Client)",
+  "version": "3.0.0",
+  "description": "調 - メール処理を代わりにこなす相棒 (eM Client)",
   "type": "module",
   "main": "dist-electron/main.js",
   "scripts": {
@@ -22,6 +22,7 @@
     "@xterm/xterm": "^6.0.0",
     "better-sqlite3": "^11.8.1",
     "imapflow": "^1.2.10",
+    "nodemailer": "^8.0.1",
     "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

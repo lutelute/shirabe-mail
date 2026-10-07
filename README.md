@@ -18,14 +18,39 @@ shirabe-mail/
 │       └── types/
 ├── mcp-server/       # MCP サーバー (Claude Code 連携)
 │   └── src/
-│       ├── tools/    # 17 ツール
+│       ├── tools/    # 21 ツール + partner/ 相棒 14 ツール
 │       └── db/       # eM Client DB アクセス層
 └── README.md
 ```
 
 ## Features
 
-### 🌙 夜間執事 v2（案件ベースの秘書モデル）
+### 相棒 v3（メール処理を代わりにこなす）
+開いたら「判断だけが残っている」状態にし、判断したら送るところまでやる。
+
+| 段階 | 内容 |
+|------|------|
+| 集める | 前回確認以降の新着（初回は未読 N 日分）。30 分ごと・起動時・スリープ復帰時 |
+| ふるう | サーバーの `[SPAM]`・ブランド詐称・CFP/広告を AI の前に除外 |
+| 片付ける | 一斉配信を **既読 + アーカイブ**（IMAP。可逆、「戻す」あり） |
+| 判断する | 案件ごとに 要件・期限・優先度・返信の種類・**先生に聞くべき問い**・自動送信して安全か |
+| 用意する | 返信下書き（先生の文体）。問いがある案件は答えてから下書き |
+| 任せる | 権限「任せる」なら常連・学内・面識ありへの定型返信（お礼・確認・了解・日程確定）を送信予定へ |
+| 送る | **遅延送信（既定 5 分）+ 取消**。SMTP で返信ヘッダ付き、送信済みにも保存、元メールに返信済みの印 |
+| 見張る | 先生が送って返事が無いスレッドを追跡。催促文を用意、返事が来たら自動で閉じる |
+| 作業に移す | 案件から該当フォルダを推定して作業指示書を書き、ターミナル（Claude Code）/ FinderAI / Finder で開く。下書きは eM Client の「下書き」にも入れられる |
+| 予定を見張る | メールの会議・締切をカレンダーと照合し、未登録なら警告。ICS で eM Client の登録ダイアログを開く |
+| 報告する | 申し送り + 「今日」画面 + 日誌（何をしたかを全部残す） |
+
+- **権限レベル**（設定 → 相棒）: 見るだけ / 下書き・整理まで（既定、送信は先生の 1 タップ） / 定型返信は任せる
+- **接続は eM Client から自動検出**: IMAP/SMTP のホスト・ポート・ユーザー名・表示名・署名を `accounts.dat` と送信済みメールから推定。先生が入れるのはパスワードだけ（Gmail はアプリパスワード）。未設定でも「送る」は eM Client の作成画面にフォールバック
+- **APIキー不要**: AI は Claude Code CLI 経由（ツール無し・MCP 無しの軽量呼び出し）
+- **学習する**: 「常に重要 / 不要」が `butler-rules.json` に残り、人物像・判断ルールは設定の「相棒に教える」で編集
+- **安全ライン**: 片付けは移動のみ、送信は猶予付き、削除（ゴミ箱）は承認制。全操作を `journal/` に記録
+- 検証: `npm test`（34 件）、`npm run butler:dryrun -- <account> <days> <maxCases> <maxDrafts> [observe|assist|delegate]`（実DB読み取り＋実CLI、書き込みなし）
+- 設計メモ: `docs/PARTNER_DESIGN.md`
+
+### 🌙 夜間執事 v2（相棒の土台）
 新着メールを裏で読み、朝ダッシュボードを開いたときには「判断だけが残っている」状態にする。
 
 | 段階 | 内容 |
@@ -73,7 +98,7 @@ shirabe-mail/
 - 監査（過去メール履歴分析）
 - ゴミメール検出
 
-### MCP サーバー（17 ツール）
+### MCP サーバー（35 ツール）
 Claude Code から直接メール・カレンダー・タスクを操作。
 
 | ツール | 説明 |
@@ -97,6 +122,28 @@ Claude Code から直接メール・カレンダー・タスクを操作。
 | `copy_mail_to_folder` | フォルダコピー |
 | `tag_mail` | タグ付け |
 | `get_mail_tags` | タグ取得 |
+| `get_note` | メールノート取得 |
+| `update_note` | メールノート更新 |
+
+#### 相棒ツール（v3、アプリ「調」と同じ状態を共有）
+Claude Code から「今日」を読み、決め、下書きを書き、送信予定に載せる。AI は呼び出し元の Claude が担い、実際の送信は調が行う（遅延 + 取消）。
+
+| ツール | 説明 |
+|--------|------|
+| `partner_today` | 申し送り・決めてほしいこと・送るだけ・やること・送信予定・返事待ちの一覧 |
+| `partner_case` | 案件の詳細（判定・根拠・下書き・問い）とスレッド本文 |
+| `partner_style` | 先生の文体・人物像・判断ルール・連絡先・送信メール見本・署名 |
+| `partner_decide` | 問いに先生の答えを記録 |
+| `partner_set_draft` | 返信下書きを保存 |
+| `partner_send` | 返信を送信予定へ（猶予付き・取消可） |
+| `partner_cancel_send` | 送信予定を取り消す |
+| `partner_case_status` | 済み / 後で / しない / 戻す |
+| `partner_followups` | 返事待ちの一覧 |
+| `partner_nudge` | 催促を送信予定へ |
+| `partner_followup_status` | 返事待ちを閉じる / まだ待つ / 戻す |
+| `partner_sender_rule` | 送信者を常に重要 / 不要として覚える |
+| `partner_journal` | 相棒の日誌 |
+| `partner_run` | 調に今すぐ確認を頼む |
 
 ## Install
 
@@ -159,6 +206,7 @@ npm run build
 
 - **Frontend**: Electron + React + TypeScript + Vite + Tailwind CSS
 - **DB Access**: better-sqlite3 (eM Client SQLite DB 直接読み取り)
-- **AI**: Claude Code CLI (夜間執事の判定・下書き・申し送り、分析、ドラフト生成)
+- **Mail I/O**: imapflow（既読・アーカイブ・送信済み保存）+ nodemailer（SMTP 送信）
+- **AI**: Claude Code CLI (相棒の判定・下書き・催促文・申し送り、分析)
 - **MCP**: @modelcontextprotocol/sdk (Claude Code 連携)
 - **IPC**: Electron contextBridge (renderer ↔ main プロセス通信)

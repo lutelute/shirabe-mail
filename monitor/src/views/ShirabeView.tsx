@@ -6,7 +6,6 @@ import { useAutoRefresh } from '../hooks/useAutoRefresh';
 import { isObviousSpam } from '../utils/spamFilter';
 import { openInEmClient } from '../utils/openInEmClient';
 import LoadingSkeleton from '../components/shared/LoadingSkeleton';
-import ButlerReport from '../components/ButlerReport';
 
 interface ShirabeViewProps {
   onNavigate: (view: ViewType) => void;
@@ -358,16 +357,21 @@ export default function ShirabeView({ onNavigate }: ShirabeViewProps) {
             })}
           </p>
         </div>
-        <button
-          onClick={loadDigest}
-          className="px-3 py-1.5 bg-surface-800 hover:bg-surface-700 rounded-lg text-sm text-surface-300 transition-colors"
-        >
-          更新
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => onNavigate('today')}
+            className="px-3 py-1.5 bg-accent-500/20 hover:bg-accent-500/30 border border-accent-500/30 rounded-lg text-sm text-accent-400 transition-colors"
+          >
+            今日の相棒 →
+          </button>
+          <button
+            onClick={loadDigest}
+            className="px-3 py-1.5 bg-surface-800 hover:bg-surface-700 rounded-lg text-sm text-surface-300 transition-colors"
+          >
+            更新
+          </button>
+        </div>
       </div>
-
-      {/* 🌙 Night Butler report — topmost section: what was auto-done + what needs approval */}
-      <ButlerReport onNavigate={onNavigate} />
 
       {/* Running generation indicator */}
       {noteService.runningCount > 0 && (

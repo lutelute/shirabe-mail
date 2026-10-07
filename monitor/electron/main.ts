@@ -35,9 +35,11 @@ import type { PipelineDeps, ButlerProgress } from './services/pipeline';
 import { getCandidateMails, getSenderStats, getThreadContext, getMailBodies, getSentExemplars } from './services/mail-intel';
 import { createClaudeRunner } from './services/claude-runner';
 import type { ClaudeRunner } from './services/claude-runner';
-import { buildJudgmentContext, classifyCases, draftReply, writeBrief } from './services/butler-brain';
+import { buildJudgmentContext, classifyCases, draftReply, writeBrief, extractEvents } from './services/butler-brain';
 import type { JudgmentContext } from './services/butler-brain';
 import { loadRules, saveRules, withSenderRule } from './services/butler-rules';
+import { createPartner } from './partner-ipc';
+import type { Partner } from './partner-ipc';
 import type { ButlerRules, ButlerCaseStatus, SenderStats } from '../src/types/index';
 import type {
   AppSettings,
@@ -63,6 +65,8 @@ let runButlerPipelineFromMain:
   | ((opts?: { force?: boolean }) => Promise<NightlyDigest>)
   | null = null;
 let butlerScheduleTimer: ReturnType<typeof setInterval> | null = null;
+// 相棒(v3)。registerIpcHandlers で作り、whenReady でスケジューラを起動する
+let partnerRef: Partner | null = null;
 
 const isDev = !app.isPackaged;
 
@@ -307,7 +311,14 @@ function transformImapPasswords(
     if (next !== cfg.credentials.password) changed = true;
     return { ...cfg, credentials: { ...cfg.credentials, password: next } };
   });
-  return { settings: { ...settings, imapConfigs: configs }, changed };
+  // SMTP(相棒の送信)のパスワードも同じ扱い
+  const smtp = (settings.smtpConfigs ?? []).map((cfg) => {
+    if (!cfg?.credentials?.password) return cfg;
+    const next = fn(cfg.credentials.password);
+    if (next !== cfg.credentials.password) changed = true;
+    return { ...cfg, credentials: { ...cfg.credentials, password: next } };
+  });
+  return { settings: { ...settings, imapConfigs: configs, smtpConfigs: smtp }, changed };
 }
 
 // Persist settings to disk with IMAP passwords encrypted at rest.
@@ -327,7 +338,7 @@ function loadSettings(): AppSettings {
   }
 
   // Detect legacy plaintext passwords and migrate them to encrypted-at-rest.
-  const hasLegacyPlaintext = (raw.imapConfigs ?? []).some(
+  const hasLegacyPlaintext = [...(raw.imapConfigs ?? []), ...(raw.smtpConfigs ?? [])].some(
     (c) => c?.credentials?.password && !c.credentials.password.startsWith(ENC_PREFIX),
   );
   if (hasLegacyPlaintext && safeStorage.isEncryptionAvailable()) {
@@ -626,7 +637,13 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
-    backgroundColor: '#1a1a2e',
+    minWidth: 960,
+    minHeight: 640,
+    // 和紙色(paper テーマ)。起動時のちらつきを抑える
+    backgroundColor: '#F6F3EC',
+    // 信号機ボタンだけを残してタイトルバーを消す(ヘッダはレンダラ側でドラッグ領域にする)
+    titleBarStyle: 'hiddenInset',
+    trafficLightPosition: { x: 16, y: 14 },
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -731,39 +748,35 @@ function createWindow(): void {
 
 // --- Tray ---
 function createTray(): void {
+  // 開発時は build/、パッケージ時は extraResources で Resources/ 直下に置いた Template 画像
+  const iconPath = isDev
+    ? path.join(__dirname, '..', 'build', 'tray-iconTemplate.png')
+    : path.join(process.resourcesPath, 'tray-iconTemplate.png');
   try {
-    tray = new Tray(
-      path.join(__dirname, '..', 'build', 'tray-iconTemplate.png'),
-    );
-  } catch {
-    // No tray icon available, skip
+    tray = new Tray(iconPath);
+  } catch (err) {
+    console.warn('[tray] unavailable:', (err as Error).message);
     return;
   }
 
+  const showMain = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } else createWindow();
+  };
   const contextMenu = Menu.buildFromTemplate([
+    { label: '調を開く', click: showMain },
     {
-      label: 'Open',
+      label: '今すぐ確認',
       click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-        } else {
-          createWindow();
-        }
+        if (runButlerPipelineFromMain) void runButlerPipelineFromMain({ force: true }).catch((e) => console.warn('[tray] run failed:', (e as Error).message));
       },
     },
     { type: 'separator' },
-    { label: 'Quit', click: () => app.quit() },
+    { label: '終了', click: () => app.quit() },
   ]);
 
-  tray.setToolTip('調 - Shirabe');
+  tray.setToolTip('調 - 相棒は裏で確認しています');
   tray.setContextMenu(contextMenu);
-  tray.on('click', () => {
-    if (mainWindow) {
-      mainWindow.show();
-    } else {
-      createWindow();
-    }
-  });
+  tray.on('click', showMain);
 }
 
 // --- IPC handlers ---
@@ -821,6 +834,7 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('saveSettings', (_event, settings: AppSettings) => {
     saveSettings(settings);
+    try { partnerRef?.reschedule(); } catch (err) { console.warn('[partner] reschedule failed:', (err as Error).message); }
   });
 
   // --- New handlers for Claude Agent SDK features ---
@@ -2272,9 +2286,38 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
     }
   }
 
+  // 相棒(v3): 片付け・送信予定・返事待ち・通知・スケジューラ
+  const partner = createPartner({
+    userDataDir: app.getPath('userData'),
+    loadSettings,
+    saveSettings,
+    readJson: readJsonFile,
+    writeJson: writeJsonFile,
+    readNote,
+    writeNote,
+    getRunner: getButlerRunner,
+    buildContext: butlerContext,
+    rulesPath: BUTLER_RULES_PATH,
+    digestPath: NIGHTLY_DIGEST_PATH,
+    getSenderStats: cachedSenderStats,
+    openCompose: openMailComposeImpl,
+    send: (channel, payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+    },
+    showWindow: () => {
+      if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } else createWindow();
+    },
+    getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+    log: (m) => console.log(m),
+  });
+  partnerRef = partner;
+
   function buildPipelineDeps(): PipelineDeps {
     const runner = getButlerRunner();
     return {
+      ...partner.pipelineDeps(),
+      getCalendarEvents: (accountEmail, daysForward) => getEvents(accountEmail, daysForward),
+      extractEvents: (ctx, inputs, model) => extractEvents(runner, ctx, inputs, model),
       loadSettings,
       loadRules: () => loadRules(BUTLER_RULES_PATH),
       buildContext: butlerContext,
@@ -2302,6 +2345,7 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('butlerProgress', p);
         }
+        partner.setProgress(p);
       },
       log: (m) => console.log(m),
     };
@@ -2324,18 +2368,23 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
       };
     }
     butlerRunning = true;
+    partner.setRunning(true);
+    const prev = readJsonFile<NightlyDigest>(NIGHTLY_DIGEST_PATH);
     try {
       const digest = await runButlerPipeline(buildPipelineDeps(), opts);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('digestUpdated', digest);
       }
+      partner.afterRun(digest, prev);
       return digest;
     } finally {
       butlerRunning = false;
+      partner.setRunning(false);
     }
   }
   // Exposed for the scheduler in app.whenReady().
   runButlerPipelineFromMain = executeButlerPipeline;
+  partner.attach(executeButlerPipeline);
 
   ipcMain.handle('runButlerPipeline', async (_event, params?: { force?: boolean }): Promise<NightlyDigest> => {
     return executeButlerPipeline(params);
@@ -2833,33 +2882,13 @@ app.whenReady().then(() => {
     } catch { /* silent failure on auto-check */ }
   }, 5000);
 
-  // --- Night Butler scheduler ---
-  // butlerEnabled gates everything. schedule decides cadence:
-  //   'startup' = once on launch, 'hourly'/'daily' = setInterval, 'manual' = nothing.
+  // --- 相棒のスケジューラ(v3) ---
+  // butlerEnabled が全体のゲート。間隔は partnerIntervalMinutes(0=手動)。起動 15 秒後に一度、
+  // スリープ復帰 60 秒後にも一度走る(partner-ipc.ts)。
   try {
-    const s = loadSettings();
-    if (s.butlerEnabled && runButlerPipelineFromMain) {
-      const run = runButlerPipelineFromMain;
-      const sched = s.butlerSchedule;
-      if (sched === 'startup' || sched === 'hourly' || sched === 'daily') {
-        // Run shortly after launch so the window/IPC are ready.
-        setTimeout(() => {
-          void run().catch((err) =>
-            console.warn('[butler] startup run failed:', (err as Error).message),
-          );
-        }, 15_000);
-      }
-      if (sched === 'hourly' || sched === 'daily') {
-        const intervalMs = sched === 'hourly' ? 60 * 60 * 1000 : 24 * 60 * 60 * 1000;
-        butlerScheduleTimer = setInterval(() => {
-          void run().catch((err) =>
-            console.warn('[butler] scheduled run failed:', (err as Error).message),
-          );
-        }, intervalMs);
-      }
-    }
+    partnerRef?.startScheduler();
   } catch (err) {
-    console.warn('[butler] scheduler init failed:', (err as Error).message);
+    console.warn('[partner] scheduler init failed:', (err as Error).message);
   }
 
   app.on('activate', () => {
