@@ -209,6 +209,8 @@ const api = {
   partnerPickFolder: (params) => ipcRenderer.invoke('partner:pickFolder', params),
   partnerDraftToEmClient: (params) => ipcRenderer.invoke('partner:draftToEmClient', params),
   partnerAddToCalendar: (params) => ipcRenderer.invoke('partner:addToCalendar', params),
+  partnerHandoffCopy: (params) => ipcRenderer.invoke('partner:handoffCopy', params),
+  partnerCalendarCopy: (params) => ipcRenderer.invoke('partner:calendarCopy', params),
   onPartnerState: (callback) => {
     const handler = (_event, state) => callback(state);
     ipcRenderer.on('partner:state', handler);

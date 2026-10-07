@@ -29,6 +29,8 @@ export interface CaseDetailProps {
   onDraftToEmClient: (c: ButlerCase, body?: string) => void;
   onHandoffPrepare: (c: ButlerCase, instruction?: string) => void;
   onHandoffOpen: (c: ButlerCase, target: HandoffTarget) => void;
+  onHandoffCopy: (c: ButlerCase) => void;
+  onCalendarCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void;
   onPickFolder: (c: ButlerCase) => void;
   onAddToCalendar: (c: ButlerCase) => void;
 }
@@ -81,7 +83,7 @@ export default function CaseDetail(p: CaseDetailProps) {
   const showHandoff = variant !== 'fyi' && variant !== 'later';
 
   const handoffSection = showHandoff && (
-    <HandoffSection c={c} busy={handoffBusy} onPrepare={p.onHandoffPrepare} onOpen={p.onHandoffOpen} onPick={p.onPickFolder} />
+    <HandoffSection c={c} busy={handoffBusy} onPrepare={p.onHandoffPrepare} onOpen={p.onHandoffOpen} onPick={p.onPickFolder} onCopy={p.onHandoffCopy} />
   );
 
   const draftSection = showDraft && (
@@ -142,7 +144,7 @@ export default function CaseDetail(p: CaseDetailProps) {
                 {c.addressedToMe === 'cc' && <Chip label="Cc" cls="bg-card-2 text-ink-3 border-hairline" />}
                 {c.addressedToMe === 'list' && <Chip label="ML" cls="bg-card-2 text-ink-3 border-hairline" />}
               </div>
-              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} />}
+              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onCopy={p.onCalendarCopy} />}
             </div>
           </header>
 
@@ -219,7 +221,7 @@ export default function CaseDetail(p: CaseDetailProps) {
 
 // ---------- 予定(カレンダー) ----------
 
-function EventRow({ c, busy, onAdd }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void }) {
+function EventRow({ c, busy, onAdd, onCopy }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void }) {
   const ev = c.event!;
   const status = c.calendarStatus ?? 'unknown';
   return (
@@ -232,7 +234,10 @@ function EventRow({ c, busy, onAdd }: { c: ButlerCase; busy: boolean; onAdd: (c:
       {status === 'registered' && <Chip label={`登録済み${c.calendarMatch ? `: ${c.calendarMatch}` : ''}`} cls="bg-ok-soft text-ok border-ok/30" />}
       {status === 'unknown' && <Chip label="カレンダー未確認" cls="bg-card-2 text-ink-3 border-hairline" />}
       {status === 'missing' && (
-        <PrimaryButton size="sm" onClick={() => onAdd(c)} disabled={busy} title="ICS を作って eM Client の登録ダイアログを開きます">{Icon.calendar}カレンダーに登録</PrimaryButton>
+        <>
+          <PrimaryButton size="sm" onClick={() => onAdd(c)} disabled={busy} title="ICS を作って eM Client の登録ダイアログを開きます">{Icon.calendar}カレンダーに登録</PrimaryButton>
+          <GhostButton onClick={() => onCopy(c, 'chatgpt')} disabled={busy} title="予定の文面をコピーして ChatGPT を開きます(貼り付けて登録を頼む)">ChatGPT で登録</GhostButton>
+        </>
       )}
     </div>
   );
@@ -240,12 +245,13 @@ function EventRow({ c, busy, onAdd }: { c: ButlerCase; busy: boolean; onAdd: (c:
 
 // ---------- 作業に移る ----------
 
-function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
+function HandoffSection({ c, busy, onPrepare, onOpen, onPick, onCopy }: {
   c: ButlerCase;
   busy: boolean;
   onPrepare: (c: ButlerCase, instruction?: string) => void;
   onOpen: (c: ButlerCase, target: HandoffTarget) => void;
   onPick: (c: ButlerCase) => void;
+  onCopy: (c: ButlerCase) => void;
 }) {
   const h = c.handoff ?? null;
   const [showAll, setShowAll] = useState(false);
@@ -274,9 +280,13 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
         <Label>作業に移る</Label>
         <span className="text-[13.5px] font-semibold text-ink">{h.title}</span>
         {busy && <Spinner />}
-        {h.lastOpenedAt && h.lastTarget && (
-          <span className="ml-auto text-[11px] text-ink-3 tnum">{fmtTime(h.lastOpenedAt)} に {HANDOFF_TARGET_LABEL[h.lastTarget]} で開きました</span>
-        )}
+        <span className="ml-auto text-[11px] text-ink-3 tnum truncate">
+          {h.status === 'taken' && h.takenAt
+            ? `${fmtTime(h.takenAt)} に受け取り済み(${h.takenBy?.startsWith('cli:') ? 'shirabe-task @ ' + h.takenBy.slice(4).split('/').slice(-2).join('/') : h.takenBy === 'clipboard' ? 'コピー' : h.takenBy && HANDOFF_TARGET_LABEL[h.takenBy as HandoffTarget] ? HANDOFF_TARGET_LABEL[h.takenBy as HandoffTarget] : h.takenBy ?? ''})`
+            : h.status === 'done'
+              ? '作業は完了しています'
+              : '受け渡し待ち: どこで Claude を開いても起動時に案内が出ます(shirabe-task take)'}
+        </span>
       </div>
 
       {/* フォルダ */}
@@ -314,6 +324,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick }: {
         <PrimaryButton onClick={() => onOpen(c, 'terminal')} disabled={busy || !canOpen} title={canOpen ? 'Terminal.app でこのフォルダに Claude Code を起動し、指示書を渡します(w)' : 'フォルダを選んでください'}>{Icon.terminal}ターミナルで Claude Code</PrimaryButton>
         <SubtleButton onClick={() => onOpen(c, 'finderai')} disabled={busy || !canOpen} title={canOpen ? 'FinderAI でこのフォルダを開き、Claude セッションへ指示を送ります' : 'フォルダを選んでください'}>FinderAI で開く</SubtleButton>
         <GhostButton onClick={() => onOpen(c, 'folder')} disabled={busy || !canOpen} title="Finder で表示">{Icon.folder}フォルダを表示</GhostButton>
+        <SubtleButton onClick={() => onCopy(c)} disabled={busy} title="指示書ごとクリップボードへ。場所を移してから開いた Claude や ChatGPT に貼り付けられます">指示をコピー</SubtleButton>
         <span className="flex-1" />
         <input
           value={extra}

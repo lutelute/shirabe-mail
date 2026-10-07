@@ -202,6 +202,16 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
     }
   }), [withBusy, flash, patchCase, refresh]);
 
+  const onHandoffCopy = useCallback((c: ButlerCase) => withBusy(`handoff:${c.id}`, async () => {
+    const res = await window.electronAPI.partnerHandoffCopy({ caseId: c.id });
+    if (res.status === 'error') flash(res.error ?? 'コピーに失敗しました');
+    else flash('作業指示をコピーしました。場所を移してから開いた Claude や ChatGPT に貼り付けてください');
+  }), [withBusy]);
+  const onCalendarCopy = useCallback((c: ButlerCase, target: 'chatgpt' | 'clipboard') => withBusy(c.id, async () => {
+    const res = await window.electronAPI.partnerCalendarCopy({ caseId: c.id, target });
+    if (res.status === 'error') flash(res.error ?? 'コピーに失敗しました');
+    else flash(res.opened ? '予定の文面をコピーして ChatGPT を開きました。貼り付けて登録を頼んでください' : '予定の文面をコピーしました');
+  }), [withBusy]);
   const onAddToCalendar = useCallback((c: ButlerCase) => withBusy(c.id, async () => {
     const res = await window.electronAPI.partnerAddToCalendar({ caseId: c.id });
     if (res.status === 'error') { flash(res.error ?? 'カレンダーに登録できませんでした'); return; }
@@ -405,7 +415,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           c={item.c} variant={item.variant} canSend={canSendFor(item.c.accountEmail)} busy={busy.has(item.c.id)} handoffBusy={busy.has(`handoff:${item.c.id}`)} sendDelayMinutes={sendDelay}
           editRequest={editRequest} handoffRequest={handoffRequest} emDraftRequest={emDraftRequest}
           onStatus={onStatus} onRule={onRule} onDraft={onDraft} onSaveDraft={onSaveDraft} onSend={onSend} onAnswer={onAnswer}
-          onDraftToEmClient={onDraftToEmClient} onHandoffPrepare={onHandoffPrepare} onHandoffOpen={onHandoffOpen} onPickFolder={onPickFolder} onAddToCalendar={onAddToCalendar}
+          onDraftToEmClient={onDraftToEmClient} onHandoffPrepare={onHandoffPrepare} onHandoffOpen={onHandoffOpen} onPickFolder={onPickFolder} onAddToCalendar={onAddToCalendar} onHandoffCopy={onHandoffCopy} onCalendarCopy={onCalendarCopy}
         />
       );
     }

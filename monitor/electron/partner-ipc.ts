@@ -8,7 +8,7 @@
 //   - 片付けは 既読 + アーカイブ のみ(削除しない)。「戻す」で元に戻る
 //   - すべての操作を日誌に残す
 
-import { ipcMain, Notification, powerMonitor, app, dialog, shell } from 'electron';
+import { ipcMain, Notification, powerMonitor, app, dialog, shell, clipboard } from 'electron';
 import type { FSWatcher } from 'fs';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -28,6 +28,7 @@ import { discoverAccountEndpoints } from './services/account-discovery';
 import { tidyToArchive, restoreToInbox, markAnswered, appendToSent, appendToDrafts, testImap, isGmailHost } from './services/mailbox-actions';
 import { sendMail, verifySmtp, composeBody, replySubject, friendlySmtpError, buildRawMessage } from './services/mail-sender';
 import { buildIcs } from './services/calendar-ics';
+import { loadIndex, saveIndex, upsertTask, markTask, ensureTaskCli, indexPath } from './services/task-cli';
 import type { QuotedOriginal } from './services/mail-sender';
 import { normalizeOutbox, enqueue, cancel, expedite, update as updateOutbox, dueItems, prune, visibleItems } from './services/outbox';
 import type { OutboxStore } from './services/outbox';
@@ -98,10 +99,12 @@ export function createPartner(host: PartnerHost): Partner {
   let resumeTimer: ReturnType<typeof setTimeout> | null = null;
   let outboxBusy = false;
   let watcher: FSWatcher | null = null;
+  let handoffWatcher: FSWatcher | null = null;
   let watchDebounce: ReturnType<typeof setTimeout> | null = null;
   const RUN_REQUEST_PATH = path.join(host.userDataDir, 'run-request.json');
 
   // ---------- 小道具 ----------
+  const safeName = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
   const journal = (entry: Omit<JournalEntry, 'at'>): void => { appendJournal(JOURNAL_DIR, entry); };
   const loadOutbox = (): OutboxStore => normalizeOutbox(host.readJson<OutboxStore>(OUTBOX_PATH));
   const saveOutbox = (s: OutboxStore): void => host.writeJson(OUTBOX_PATH, s);
@@ -157,6 +160,48 @@ export function createPartner(host: PartnerHost): Partner {
     } catch (err) {
       host.log(`[partner] watcher unavailable: ${(err as Error).message}`);
     }
+    // 作業の共有キュー(CLI / MCP が受け取りを記録したら、案件に写して画面へ)
+    try {
+      const dir = path.dirname(indexPath(host.userDataDir));
+      fs.mkdirSync(dir, { recursive: true });
+      handoffWatcher = fs.watch(dir, { persistent: false }, (_ev, filename) => {
+        if (String(filename ?? '') !== 'index.json') return;
+        setTimeout(() => { if (syncHandoffIndex()) pushState(); }, 300);
+      });
+    } catch (err) {
+      host.log(`[partner] handoff watcher unavailable: ${(err as Error).message}`);
+    }
+  }
+
+  /** index.json の受け取り状態を案件へ写す。変化があれば true */
+  function syncHandoffIndex(): boolean {
+    const digest = loadDigest();
+    if (!digest?.cases) return false;
+    const idx = loadIndex(host.userDataDir);
+    let changed = false;
+    for (const task of idx.tasks) {
+      const c = digest.cases.find((x) => x.id === task.caseId);
+      if (!c?.handoff) continue;
+      if (c.handoff.status !== task.status || c.handoff.takenAt !== task.takenAt || c.handoff.takenBy !== task.takenBy) {
+        c.handoff.status = task.status;
+        c.handoff.takenAt = task.takenAt;
+        c.handoff.takenBy = task.takenBy;
+        if (task.status === 'taken' && task.takenBy?.startsWith('cli:')) {
+          journal({ kind: 'decided', text: `作業を受け取り: ${task.title}(${task.takenBy.slice(4)})`, caseId: c.id, accountEmail: c.accountEmail });
+        }
+        changed = true;
+      }
+    }
+    if (changed) saveDigest(digest);
+    return changed;
+  }
+
+  function putTaskInQueue(c: ButlerCase, h: CaseHandoff, status?: 'pending' | 'taken' | 'done', by?: string): void {
+    let idx = upsertTask(loadIndex(host.userDataDir), { id: safeName(c.id), caseId: c.id, title: h.title, docPath: h.docPath, folder: h.folder, deliverable: h.deliverable });
+    if (status === 'taken' || status === 'done') idx = markTask(idx, safeName(c.id), status, by);
+    saveIndex(host.userDataDir, idx);
+    const task = idx.tasks.find((x) => x.id === safeName(c.id));
+    if (task) { h.status = task.status; h.takenAt = task.takenAt; h.takenBy = task.takenBy; }
   }
 
   function getState(): PartnerState {
@@ -412,6 +457,8 @@ export function createPartner(host: PartnerHost): Partner {
     runPipeline = run;
     registerIpc();
     startWatcher();
+    ensureTaskCli(host.userDataDir, host.log);
+    syncHandoffIndex();
     if (!outboxTimer) outboxTimer = setInterval(() => { void processOutbox(); }, OUTBOX_TICK_MS);
     void processOutbox();
     try {
@@ -672,7 +719,6 @@ export function createPartner(host: PartnerHost): Partner {
     });
 
     const HANDOFF_DIR = path.join(host.userDataDir, 'handoff');
-    const safeName = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
 
     function writeHandoffDoc(c: ButlerCase, h: Omit<CaseHandoff, 'docPath' | 'preparedAt' | 'folderExists'>): string {
       fs.mkdirSync(HANDOFF_DIR, { recursive: true });
@@ -726,6 +772,7 @@ export function createPartner(host: PartnerHost): Partner {
           preparedAt: new Date().toISOString(),
         };
         handoff.docPath = writeHandoffDoc(c, handoff);
+        putTaskInQueue(c, handoff);
         withCase(c.id, (cc) => { cc.handoff = handoff; });
         journal({ kind: 'decided', text: `作業指示書を用意: ${handoff.title}${folder ? ` → ${folder}` : ''}`, caseId: c.id, accountEmail: c.accountEmail });
         pushState();
@@ -748,6 +795,7 @@ export function createPartner(host: PartnerHost): Partner {
         const base: CaseHandoff = cc.handoff ?? { folder: null, folderExists: false, folderReason: '', title: cc.subject.slice(0, 20), instructions: '', deliverable: '', docPath: '', preparedAt: new Date().toISOString() };
         cc.handoff = { ...base, folder, folderExists: true, folderReason: '先生が選択' };
         if (!cc.handoff.docPath) cc.handoff.docPath = writeHandoffDoc(cc, cc.handoff);
+        putTaskInQueue(cc, cc.handoff, cc.handoff.status === 'taken' ? 'taken' : undefined, cc.handoff.takenBy);
       });
       pushState();
       return { status: 'done', folder };
@@ -811,10 +859,71 @@ export function createPartner(host: PartnerHost): Partner {
       } catch (err) {
         return { status: 'error', error: (err as Error).message };
       }
-      withCase(c.id, (cc) => { if (cc.handoff) { cc.handoff.lastOpenedAt = new Date().toISOString(); cc.handoff.lastTarget = params.target; } });
+      withCase(c.id, (cc) => {
+        if (cc.handoff) {
+          cc.handoff.lastOpenedAt = new Date().toISOString();
+          cc.handoff.lastTarget = params.target;
+          if (params.target !== 'folder') putTaskInQueue(cc, cc.handoff, 'taken', params.target);
+        }
+      });
       journal({ kind: 'decided', text: `作業へ: ${detail} — 「${c.subject.slice(0, 40)}」`, caseId: c.id, accountEmail: c.accountEmail });
       pushState();
       return { status: 'done', detail };
+    });
+
+    ipcMain.handle('partner:handoffCopy', (_e, params: { caseId: string }) => {
+      const digest = loadDigest();
+      const c = digest?.cases?.find((x) => x.id === params?.caseId);
+      if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
+      const h = c.handoff;
+      if (!h) return { status: 'error', error: '先に作業指示書を作ってください' };
+      const text = [
+        `調からの作業指示: ${h.title}`,
+        `作業フォルダ: ${h.folder ?? '(未定。今いる場所で)'}`,
+        `指示書ファイル: ${h.docPath}`,
+        `成果物: ${h.deliverable}`,
+        '',
+        'まず下の指示書を読み、作業を進めてください。終わったら成果物の場所と、相手への返信文案を短く報告してください。',
+        '',
+        '---',
+        h.instructions,
+      ].join('\n');
+      clipboard.writeText(text);
+      withCase(c.id, (cc) => { if (cc.handoff) putTaskInQueue(cc, cc.handoff, 'taken', 'clipboard'); });
+      journal({ kind: 'decided', text: `作業指示をコピー: ${h.title}`, caseId: c.id, accountEmail: c.accountEmail });
+      pushState();
+      return { status: 'done', text };
+    });
+
+    ipcMain.handle('partner:calendarCopy', async (_e, params: { caseId: string; target: 'chatgpt' | 'clipboard' }) => {
+      const digest = loadDigest();
+      const c = digest?.cases?.find((x) => x.id === params?.caseId);
+      if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
+      const ev = c.event;
+      if (!ev) return { status: 'error', error: 'この案件には予定が見つかっていません' };
+      const when = ev.allDay
+        ? `${ev.start}${ev.end && ev.end !== ev.start ? `〜${ev.end}` : ''}(終日)`
+        : `${ev.start.replace('T', ' ')}${ev.end ? `〜${ev.end.includes('T') && ev.end.slice(0, 10) === ev.start.slice(0, 10) ? ev.end.slice(11) : ev.end.replace('T', ' ')}` : ''}`;
+      const text = [
+        '次の予定をカレンダーに登録してください。',
+        `件名: ${ev.title}`,
+        `日時: ${when}`,
+        ev.location ? `場所: ${ev.location}` : null,
+        `メモ: ${c.summary}`,
+        `出典: ${c.fromName || c.fromAddress} からのメール「${c.subject}」`,
+      ].filter(Boolean).join('\n');
+      clipboard.writeText(text);
+      let opened = false;
+      if (params.target === 'chatgpt') {
+        try {
+          if (fs.existsSync('/Applications/ChatGPT.app')) { execFileSync('open', ['-a', 'ChatGPT'], { timeout: 8000 }); opened = true; }
+          else { await shell.openExternal('https://chatgpt.com/'); opened = true; }
+        } catch (err) {
+          host.log(`[partner] open ChatGPT failed: ${(err as Error).message}`);
+        }
+      }
+      journal({ kind: 'decided', text: `予定の文面をコピー${opened ? '(ChatGPT を開いた)' : ''}: ${ev.title}`, caseId: c.id, accountEmail: c.accountEmail });
+      return { status: 'done', text, opened };
     });
 
     ipcMain.handle('partner:addToCalendar', async (_e, params: { caseId: string }) => {
@@ -908,6 +1017,7 @@ export function createPartner(host: PartnerHost): Partner {
       if (outboxTimer) { clearInterval(outboxTimer); outboxTimer = null; }
       if (resumeTimer) { clearTimeout(resumeTimer); resumeTimer = null; }
       if (watcher) { watcher.close(); watcher = null; }
+      if (handoffWatcher) { handoffWatcher.close(); handoffWatcher = null; }
     },
   };
 }

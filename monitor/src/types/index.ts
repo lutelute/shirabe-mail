@@ -686,6 +686,10 @@ export interface CaseHandoff {
   preparedAt: string;
   lastOpenedAt?: string;
   lastTarget?: HandoffTarget;
+  // 共有キュー(どの Claude からでも受け取れる)
+  status?: 'pending' | 'taken' | 'done';
+  takenAt?: string;
+  takenBy?: string;             // 'terminal' / 'finderai' / 'clipboard' / 'cli:<cwd>' / 'mcp'
 }
 
 export type HandoffTarget = 'terminal' | 'finderai' | 'folder';
@@ -1005,6 +1009,8 @@ export interface ElectronAPI {
   partnerHandoffOpen: (params: { caseId: string; target: HandoffTarget }) => Promise<{ status: string; detail?: string; error?: string }>;
   partnerPickFolder: (params: { caseId: string }) => Promise<{ status: string; folder?: string; error?: string }>;
   partnerDraftToEmClient: (params: { caseId: string; body?: string }) => Promise<{ status: string; folder?: string; fallback?: 'compose'; error?: string }>;
+  partnerHandoffCopy: (params: { caseId: string }) => Promise<{ status: string; text?: string; error?: string }>;
+  partnerCalendarCopy: (params: { caseId: string; target: 'chatgpt' | 'clipboard' }) => Promise<{ status: string; text?: string; opened?: boolean; error?: string }>;
   // カレンダー
   partnerAddToCalendar: (params: { caseId: string }) => Promise<{ status: string; path?: string; error?: string }>;
   partnerSaveProfile: (content: string) => Promise<void>;

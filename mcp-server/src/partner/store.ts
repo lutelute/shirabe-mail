@@ -20,7 +20,22 @@ export const PATHS = {
   profile: path.join(USER_DATA, 'butler-profile.md'),
   settings: path.join(USER_DATA, 'settings.json'),
   runRequest: path.join(USER_DATA, 'run-request.json'),
+  handoffIndex: path.join(USER_DATA, 'handoff', 'index.json'),
 };
+
+// ---- 作業の共有キュー(調が用意した作業指示書。CLI shirabe-task と同じ形式) ----
+export interface HandoffTask {
+  id: string; caseId: string; title: string; docPath: string; folder: string | null; deliverable: string;
+  createdAt: string; status: 'pending' | 'taken' | 'done'; takenAt?: string; takenBy?: string; doneAt?: string;
+}
+export function loadTasks(): HandoffTask[] {
+  const r = readJson<{ tasks?: HandoffTask[] }>(PATHS.handoffIndex);
+  return Array.isArray(r?.tasks) ? r!.tasks : [];
+}
+export function saveTasks(tasks: HandoffTask[]): void { writeJson(PATHS.handoffIndex, { version: 1, tasks }); }
+export function readTaskDoc(t: HandoffTask): string {
+  try { return fs.readFileSync(t.docPath, 'utf-8'); } catch (e) { return `(指示書が読めません: ${(e as Error).message})`; }
+}
 
 // ---- 型(アプリ側 monitor/src/types/index.ts と同じ形。使う分だけ) ----
 export type ButlerPriority = 'P1' | 'P2' | 'P3' | 'P4';

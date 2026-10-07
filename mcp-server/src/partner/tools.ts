@@ -9,6 +9,7 @@ import { getMailThread } from '../tools/get-mail-thread.js';
 import {
   PATHS, readJson, writeJson, loadDigest, saveDigest, loadOutbox, saveOutbox, loadFollowUps, saveFollowUps,
   appendJournal, readJournal, requestRun, canSend, sendDelayMinutes, replySubject, enqueueOutbox, cancelOutbox, summarizeToday,
+  loadTasks, saveTasks, readTaskDoc,
 } from './store.js';
 import type { ButlerCase, ButlerCaseStatus } from './store.js';
 import { resolveReplyRecipients } from './recipients.js';
@@ -216,6 +217,44 @@ export function registerPartnerTools(server: McpServer): void {
     '相棒の日誌(何をしたか)を新しい順に返す',
     { limit: z.number().int().min(1).max(200).default(40) },
     async ({ limit }) => text(readJournal(limit)),
+  );
+
+  server.tool(
+    'partner_tasks',
+    '調が用意した作業指示書(作業の共有キュー)の一覧。pending=受け渡し待ち / taken=受け取り済み。どのフォルダの Claude からでも受け取れる',
+    { include_done: z.boolean().default(false) },
+    async ({ include_done }) => text(loadTasks().filter((t) => include_done || t.status !== 'done').sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map((t) => ({ id: t.id, title: t.title, folder: t.folder, status: t.status, createdAt: t.createdAt, takenBy: t.takenBy, deliverable: t.deliverable }))),
+  );
+
+  server.tool(
+    'partner_take_task',
+    '作業指示書を受け取る(内容を返し、受け取り済みにする。調の画面に反映される)。id 省略時は最新の待ち',
+    { id: z.string().optional(), cwd: z.string().optional().describe('作業する場所(分かれば)') },
+    async ({ id, cwd }) => {
+      const tasks = loadTasks();
+      const cands = tasks.filter((t) => t.status !== 'done').sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const t = id ? tasks.find((x) => x.id === id || x.caseId === id) : cands[0];
+      if (!t) return fail('受け渡し待ちの作業がありません');
+      t.status = 'taken'; t.takenAt = new Date().toISOString(); t.takenBy = `mcp${cwd ? `:${cwd}` : ''}`;
+      saveTasks(tasks);
+      appendJournal({ kind: 'decided', text: `作業を受け取り(MCP): ${t.title}`, caseId: t.caseId });
+      return text({ task: { id: t.id, title: t.title, folder: t.folder, deliverable: t.deliverable, docPath: t.docPath }, instructions: readTaskDoc(t), note: '終わったら partner_task_done。相手への返信は partner_set_draft / partner_send' });
+    },
+  );
+
+  server.tool(
+    'partner_task_done',
+    '作業指示書の作業を完了にする',
+    { id: z.string() },
+    async ({ id }) => {
+      const tasks = loadTasks();
+      const t = tasks.find((x) => x.id === id || x.caseId === id);
+      if (!t) return fail(`作業が見つかりません: ${id}`);
+      t.status = 'done'; t.doneAt = new Date().toISOString();
+      saveTasks(tasks);
+      appendJournal({ kind: 'closed', text: `作業を完了(MCP): ${t.title}`, caseId: t.caseId });
+      return text({ status: 'done', id: t.id });
+    },
   );
 
   server.tool(
