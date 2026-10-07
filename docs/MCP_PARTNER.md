@@ -34,3 +34,19 @@ Claude Code の MCP 設定(調が `~/.mcp.json` と userData に自動生成):
 ```
 
 開発中は `mcp-server/build/index.js` を指す。`SHIRABE_USER_DATA` で状態の場所を変えられる(テスト用)。
+
+## 作業の受け渡し(どこで Claude を開いても)
+
+調が作った作業指示書は `~/Library/Application Support/shirabe/handoff/index.json` の**共有キュー**に載る。先生がフォルダを移してから Claude を開いても拾える。
+
+| 入口 | やること |
+|------|---------|
+| Claude Code(どのフォルダでも) | 起動時に `[調] 受け渡し待ちの作業が N 件…` と出る(SessionStart hook)。`shirabe-task take` で指示書を読む |
+| ターミナル | `shirabe-task`(一覧) / `shirabe-task take [N]` / `shirabe-task claude [N]`(その場で Claude Code を起動して渡す) / `shirabe-task done [N]` |
+| MCP(shirabe) | `partner_tasks` → `partner_take_task` → `partner_task_done` |
+| コピペ | 調の「指示をコピー」で指示書ごとクリップボードへ。Claude でも ChatGPT でも貼るだけ |
+
+受け取り(誰が・どこで・いつ)は調の案件カードに反映される。CLI `~/.local/bin/shirabe-task` は調の起動時に自動で置かれる。hook は `~/.claude/settings.json` の `SessionStart`(matcher `startup|clear|resume`)。
+
+### 予定の登録
+「カレンダーに登録」(ICS → eM Client)のほかに「ChatGPT で登録」: 予定の文面をコピーして ChatGPT を開く。先生が ChatGPT に予定登録を頼む流れに合わせたもの。
