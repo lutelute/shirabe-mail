@@ -7,7 +7,7 @@ import type { JudgmentContext, CaseInput } from '../butler-brain';
 import { withSenderRule, tierFromRules, EMPTY_RULES } from '../butler-rules';
 import { bumpPriorityByDeadline, tagsFor, sortCases, mergeCarryOver, addressedToMe, runButlerPipeline, noteIdFor, reconcileFollowUps, canAutoSend, matchCalendar, titleSimilar } from '../pipeline';
 import { buildIcs, toIcsDateTime, googleCalendarTemplateUrl } from '../calendar-ics';
-import { eventBody } from '../google-calendar';
+import { eventBody, chooseGoogleAccount } from '../google-calendar';
 import { enqueue, cancel, expedite, dueItems, prune, visibleItems, EMPTY_OUTBOX } from '../outbox';
 import { composeBody, replySubject, formatFrom } from '../mail-sender';
 import { extractSignature } from '../mail-intel';
@@ -618,4 +618,16 @@ test('google eventBody: timed / all-day / no end', () => {
   assert.deepEqual(a1.end, { date: '2026-10-09' });
   const n1 = eventBody({ title: 'x', start: '2026-10-08T23:30', allDay: false, kind: 'other' });
   assert.deepEqual(n1.end, { dateTime: '2026-10-09T00:30:00', timeZone: 'Asia/Tokyo' });
+});
+
+
+test('chooseGoogleAccount: explicit > same address > same org(大学) > gmail > first', () => {
+  const both = ['lutebass@gmail.com', 'lute@g.u-fukui.ac.jp'];
+  assert.equal(chooseGoogleAccount([], 'lute@u-fukui.ac.jp'), null);
+  assert.equal(chooseGoogleAccount(both, 'lute@u-fukui.ac.jp'), 'lute@g.u-fukui.ac.jp');      // 大学 IMAP → 大学 Google
+  assert.equal(chooseGoogleAccount(both, 'lute@g.u-fukui.ac.jp'), 'lute@g.u-fukui.ac.jp');
+  assert.equal(chooseGoogleAccount(both, 'lutebass@gmail.com'), 'lutebass@gmail.com');
+  assert.equal(chooseGoogleAccount(both, 'e115562lute@gmail.com'), 'lutebass@gmail.com');   // 別の gmail → gmail
+  assert.equal(chooseGoogleAccount(both, 'lute@u-fukui.ac.jp', 'lutebass@gmail.com'), 'lutebass@gmail.com'); // 明示
+  assert.equal(chooseGoogleAccount(['lutebass@gmail.com'], 'lute@u-fukui.ac.jp'), 'lutebass@gmail.com');      // 1 つだけならそれ
 });

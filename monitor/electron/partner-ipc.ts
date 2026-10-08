@@ -28,7 +28,7 @@ import { discoverAccountEndpoints } from './services/account-discovery';
 import { tidyToArchive, restoreToInbox, markAnswered, appendToSent, appendToDrafts, testImap, isGmailHost } from './services/mailbox-actions';
 import { sendMail, verifySmtp, composeBody, replySubject, friendlySmtpError, buildRawMessage } from './services/mail-sender';
 import { buildIcs, googleCalendarTemplateUrl } from './services/calendar-ics';
-import { createGoogleCalendar } from './services/google-calendar';
+import { createGoogleCalendar, chooseGoogleAccount } from './services/google-calendar';
 import { loadIndex, saveIndex, upsertTask, markTask, ensureTaskCli, indexPath } from './services/task-cli';
 import type { QuotedOriginal } from './services/mail-sender';
 import { normalizeOutbox, enqueue, cancel, expedite, update as updateOutbox, dueItems, prune, visibleItems } from './services/outbox';
@@ -116,18 +116,27 @@ export function createPartner(host: PartnerHost): Partner {
     log: host.log,
   });
 
+  /** どの Google アカウントに入れるか: 指定 → 設定 → 受信アカウントに合わせる */
+  function googleAccountFor(c: ButlerCase, explicit?: string): string | null {
+    const connected = google.status().accounts.map((a) => a.email);
+    return chooseGoogleAccount(connected, c.accountEmail, explicit || host.loadSettings().calendarGoogleAccount || undefined);
+  }
+
   /** 案件の予定を Google カレンダーに直接入れ、案件に記録する */
-  async function insertCaseEvent(c: ButlerCase, auto: boolean): Promise<{ id: string; htmlLink: string; calendarId: string }> {
+  async function insertCaseEvent(c: ButlerCase, auto: boolean, explicit?: string): Promise<{ id: string; htmlLink: string; calendarId: string; email: string }> {
     const ev = c.event!;
-    const r = await google.insertEvent({ ...ev, description: `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)` });
+    const account = googleAccountFor(c, explicit);
+    if (!account) throw new Error('Google カレンダーにつないだアカウントがありません');
+    const r = await google.insertEvent(account, { ...ev, description: `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)` });
     withCase(c.id, (cc) => {
       cc.calendarStatus = 'registered';
       cc.calendarMatch = ev.title;
       cc.calendarEventId = r.id;
       cc.calendarEventCalendarId = r.calendarId;
+      cc.calendarEventAccount = r.email;
       cc.calendarEventLink = r.htmlLink;
     });
-    journal({ kind: 'decided', text: `Google カレンダーに登録${auto ? '(自動)' : ''}: ${ev.title}(${ev.start})`, caseId: c.id, accountEmail: c.accountEmail });
+    journal({ kind: 'decided', text: `Google カレンダー(${r.email})に登録${auto ? '(自動)' : ''}: ${ev.title}(${ev.start})`, caseId: c.id, accountEmail: c.accountEmail });
     return r;
   }
 
@@ -959,7 +968,7 @@ export function createPartner(host: PartnerHost): Partner {
       return { status: 'done', text, opened };
     });
 
-    ipcMain.handle('partner:addToCalendar', async (_e, params: { caseId: string; target?: 'google' | 'emclient' | 'chatgpt' }) => {
+    ipcMain.handle('partner:addToCalendar', async (_e, params: { caseId: string; target?: 'google' | 'emclient' | 'chatgpt'; account?: string }) => {
       const digest = loadDigest();
       const c = digest?.cases?.find((x) => x.id === params?.caseId);
       if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
@@ -969,9 +978,9 @@ export function createPartner(host: PartnerHost): Partner {
       const description = `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}`;
       try {
         if (target === 'google' && google.status().connected) {
-          const r = await insertCaseEvent(c, false);
+          const r = await insertCaseEvent(c, false, params.account);
           pushState();
-          return { status: 'done', target, inserted: true, link: r.htmlLink, account: google.status().email };
+          return { status: 'done', target, inserted: true, link: r.htmlLink, account: r.email };
         }
         if (target === 'google') {
           const account = settings.calendarGoogleAccount || host.defaultCalendarAccount();
@@ -1001,8 +1010,10 @@ export function createPartner(host: PartnerHost): Partner {
       if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
       if (!c.calendarEventId || !c.calendarEventCalendarId) return { status: 'error', error: '相棒が登録した予定ではありません' };
       try {
-        await google.deleteEvent(c.calendarEventCalendarId, c.calendarEventId);
-        withCase(c.id, (cc) => { cc.calendarStatus = 'missing'; cc.calendarMatch = undefined; cc.calendarEventId = undefined; cc.calendarEventCalendarId = undefined; cc.calendarEventLink = undefined; });
+        const account = c.calendarEventAccount || google.status().accounts[0]?.email;
+        if (!account) throw new Error('Google カレンダーとつながっていません');
+        await google.deleteEvent(account, c.calendarEventCalendarId, c.calendarEventId);
+        withCase(c.id, (cc) => { cc.calendarStatus = 'missing'; cc.calendarMatch = undefined; cc.calendarEventId = undefined; cc.calendarEventCalendarId = undefined; cc.calendarEventAccount = undefined; cc.calendarEventLink = undefined; });
         journal({ kind: 'cancelled', text: `Google カレンダーから取り消し: ${c.event?.title ?? c.subject}`, caseId: c.id, accountEmail: c.accountEmail });
         pushState();
         return { status: 'done' };
@@ -1012,10 +1023,12 @@ export function createPartner(host: PartnerHost): Partner {
     });
 
     ipcMain.handle('google:status', () => google.status());
-    ipcMain.handle('google:connect', async (_e, params: { clientId: string; clientSecret: string; loginHint?: string }) => {
+    ipcMain.handle('google:connect', async (_e, params: { clientId?: string; clientSecret?: string; loginHint?: string }) => {
       try {
-        const st = await google.connect(params?.clientId ?? '', params?.clientSecret ?? '', params?.loginHint);
-        journal({ kind: 'decided', text: `Google カレンダーとつないだ: ${st.email}` });
+        const before = new Set(google.status().accounts.map((a) => a.email));
+        const st = await google.connect(params?.clientId, params?.clientSecret, params?.loginHint);
+        const added = st.accounts.find((a) => !before.has(a.email))?.email ?? st.accounts[st.accounts.length - 1]?.email ?? '';
+        journal({ kind: 'decided', text: `Google カレンダーとつないだ: ${added}` });
         host.showWindow();
         return { status: 'done', google: st };
       } catch (err) {
@@ -1023,11 +1036,11 @@ export function createPartner(host: PartnerHost): Partner {
         return { status: 'error', error: (err as Error).message };
       }
     });
-    ipcMain.handle('google:disconnect', () => { google.disconnect(); journal({ kind: 'decided', text: 'Google カレンダーとの接続を解除' }); return google.status(); });
-    ipcMain.handle('google:calendars', async () => {
-      try { return { status: 'done', calendars: await google.listCalendars() }; } catch (err) { return { status: 'error', error: (err as Error).message }; }
+    ipcMain.handle('google:disconnect', (_e, email?: string) => { const st = google.disconnect(email || undefined); journal({ kind: 'decided', text: `Google カレンダーとの接続を解除${email ? `: ${email}` : ''}` }); return st; });
+    ipcMain.handle('google:calendars', async (_e, email: string) => {
+      try { return { status: 'done', calendars: await google.listCalendars(String(email ?? '')) }; } catch (err) { return { status: 'error', error: (err as Error).message }; }
     });
-    ipcMain.handle('google:setCalendar', (_e, calendarId: string) => { google.setCalendar(String(calendarId ?? '')); return google.status(); });
+    ipcMain.handle('google:setCalendar', (_e, email: string, calendarId: string) => google.setCalendar(String(email ?? ''), String(calendarId ?? '')));
 
     ipcMain.handle('partner:discoverAccounts', (): AccountEndpoints[] => {
       const settings = host.loadSettings();

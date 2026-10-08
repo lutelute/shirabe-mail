@@ -566,10 +566,11 @@ export type CalendarTarget = 'google' | 'emclient' | 'chatgpt';   // 予定の�
 
 export interface GoogleStatus {
   configured: boolean;   // Client ID がある
-  connected: boolean;    // 認可済み(リフレッシュトークンあり)
-  email: string;
-  calendarId: string;
+  connected: boolean;    // 1 つ以上のアカウントを認可済み
+  accounts: Array<{ email: string; calendarId: string }>;
   clientId: string;
+  email: string;         // 互換(最初のアカウント)
+  calendarId: string;
 }
 
 // パイプラインが1通に対して下した処理の種類
@@ -682,6 +683,7 @@ export interface ButlerCase {
   calendarStatus?: 'registered' | 'missing' | 'unknown';  // カレンダーにあるか
   calendarEventId?: string;         // 相棒が Google カレンダーに直接入れた予定(取り消し用)
   calendarEventCalendarId?: string;
+  calendarEventAccount?: string;     // 入れた Google アカウント
   calendarEventLink?: string;
   calendarMatch?: string;           // 一致した予定の件名
 }
@@ -1048,14 +1050,14 @@ export interface ElectronAPI {
   partnerHandoffCopy: (params: { caseId: string }) => Promise<{ status: string; text?: string; error?: string }>;
   partnerCalendarCopy: (params: { caseId: string; target: 'chatgpt' | 'clipboard' }) => Promise<{ status: string; text?: string; opened?: boolean; error?: string }>;
   // カレンダー
-  partnerAddToCalendar: (params: { caseId: string; target?: CalendarTarget }) => Promise<{ status: string; target?: CalendarTarget; path?: string; url?: string; account?: string; inserted?: boolean; link?: string; error?: string }>;
+  partnerAddToCalendar: (params: { caseId: string; target?: CalendarTarget; account?: string }) => Promise<{ status: string; target?: CalendarTarget; path?: string; url?: string; account?: string; inserted?: boolean; link?: string; error?: string }>;
   partnerRemoveFromCalendar: (params: { caseId: string }) => Promise<{ status: string; error?: string }>;
   // Google カレンダーの認可(OAuth)
   googleStatus: () => Promise<GoogleStatus>;
-  googleConnect: (params: { clientId: string; clientSecret: string; loginHint?: string }) => Promise<{ status: string; google?: GoogleStatus; error?: string }>;
-  googleDisconnect: () => Promise<GoogleStatus>;
-  googleCalendars: () => Promise<{ status: string; calendars?: Array<{ id: string; summary: string; primary: boolean; writable: boolean }>; error?: string }>;
-  googleSetCalendar: (calendarId: string) => Promise<GoogleStatus>;
+  googleConnect: (params: { clientId?: string; clientSecret?: string; loginHint?: string }) => Promise<{ status: string; google?: GoogleStatus; error?: string }>;
+  googleDisconnect: (email?: string) => Promise<GoogleStatus>;
+  googleCalendars: (email: string) => Promise<{ status: string; calendars?: Array<{ id: string; summary: string; primary: boolean; writable: boolean }>; error?: string }>;
+  googleSetCalendar: (email: string, calendarId: string) => Promise<GoogleStatus>;
   partnerSaveProfile: (content: string) => Promise<void>;
   onPartnerState: (callback: (state: PartnerState) => void) => () => void;
 }

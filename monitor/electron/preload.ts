@@ -211,9 +211,9 @@ const api = {
   partnerRemoveFromCalendar: (params: any) => ipcRenderer.invoke('partner:removeFromCalendar', params),
   googleStatus: () => ipcRenderer.invoke('google:status'),
   googleConnect: (params: any) => ipcRenderer.invoke('google:connect', params),
-  googleDisconnect: () => ipcRenderer.invoke('google:disconnect'),
-  googleCalendars: () => ipcRenderer.invoke('google:calendars'),
-  googleSetCalendar: (calendarId: string) => ipcRenderer.invoke('google:setCalendar', calendarId),
+  googleDisconnect: (email?: string) => ipcRenderer.invoke('google:disconnect', email),
+  googleCalendars: (email: string) => ipcRenderer.invoke('google:calendars', email),
+  googleSetCalendar: (email: string, calendarId: string) => ipcRenderer.invoke('google:setCalendar', email, calendarId),
   partnerCalendarCopy: (params: any) => ipcRenderer.invoke('partner:calendarCopy', params),
   onPartnerState: (callback: (state: any) => void) => {
     const handler = (_event: any, state: any) => callback(state);

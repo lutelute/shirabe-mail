@@ -444,7 +444,7 @@ export default function SettingsView() {
                   <div className="mt-2 flex items-center gap-2">
                     <span className="text-xs text-surface-400 flex-shrink-0">アカウント</span>
                     <select value={draft.calendarGoogleAccount ?? ''} onChange={(e) => update('calendarGoogleAccount', e.target.value)} className={inputCls}>
-                      <option value="">自動(予定が入っているアカウント)</option>
+                      <option value="">自動(メールを受け取ったアカウントに合わせる)</option>
                       {accounts.filter((a) => a.type === 'google').map((a) => (
                         <option key={a.email} value={a.email}>{a.email}</option>
                       ))}

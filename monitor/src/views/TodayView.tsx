@@ -227,6 +227,20 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
       : res.target === 'emclient'
         ? 'eM Client で登録ダイアログを開きました。保存すると次回の確認で消えます'
         : `Google カレンダー${res.account ? `(${res.account})` : ''}の登録画面を開きました。内容を確かめて「保存」を押してください`;
+  // つないだ Google アカウント(予定の登録先の切り替え用)
+  const [googleAccounts, setGoogleAccounts] = useState<string[]>([]);
+  useEffect(() => {
+    let alive = true;
+    const load = () => window.electronAPI.googleStatus().then((s) => { if (alive) setGoogleAccounts(s.accounts.map((a) => a.email)); }).catch(() => undefined);
+    void load();
+    const t = setInterval(load, 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+  const onAddToCalendarAs = useCallback((c: ButlerCase, account: string) => withBusy(c.id, async () => {
+    const res = await window.electronAPI.partnerAddToCalendar({ caseId: c.id, target: 'google', account });
+    if (res.status === 'error') { flash(res.error ?? 'カレンダーに登録できませんでした'); return; }
+    flash(calendarToast(res));
+  }), [withBusy, flash]);
   const onRemoveFromCalendar = useCallback((c: ButlerCase) => withBusy(c.id, async () => {
     const res = await window.electronAPI.partnerRemoveFromCalendar({ caseId: c.id });
     flash(res.status === 'error' ? (res.error ?? '取り消せませんでした') : 'Google カレンダーから取り消しました');
@@ -441,7 +455,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           c={item.c} variant={item.variant} canSend={canSendFor(item.c.accountEmail)} busy={busy.has(item.c.id)} handoffBusy={busy.has(`handoff:${item.c.id}`)} sendDelayMinutes={sendDelay}
           editRequest={editRequest} handoffRequest={handoffRequest} emDraftRequest={emDraftRequest}
           onStatus={onStatus} onRule={onRule} onDraft={onDraft} onSaveDraft={onSaveDraft} onSend={onSend} onAnswer={onAnswer}
-          onDraftToEmClient={onDraftToEmClient} onHandoffPrepare={onHandoffPrepare} onHandoffOpen={onHandoffOpen} onPickFolder={onPickFolder} onAddToCalendar={onAddToCalendar} onAddToCalendarVia={onAddToCalendarVia} onRemoveFromCalendar={onRemoveFromCalendar} onHandoffCopy={onHandoffCopy} onCalendarCopy={onCalendarCopy}
+          onDraftToEmClient={onDraftToEmClient} onHandoffPrepare={onHandoffPrepare} onHandoffOpen={onHandoffOpen} onPickFolder={onPickFolder} onAddToCalendar={onAddToCalendar} onAddToCalendarVia={onAddToCalendarVia} onRemoveFromCalendar={onRemoveFromCalendar} googleAccounts={googleAccounts} onAddToCalendarAs={onAddToCalendarAs} onHandoffCopy={onHandoffCopy} onCalendarCopy={onCalendarCopy}
         />
       );
     }

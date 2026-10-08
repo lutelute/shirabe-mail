@@ -35,6 +35,8 @@ export interface CaseDetailProps {
   onAddToCalendar: (c: ButlerCase) => void;
   onAddToCalendarVia?: (c: ButlerCase, target: 'google' | 'emclient') => void;
   onRemoveFromCalendar?: (c: ButlerCase) => void;
+  googleAccounts?: string[];
+  onAddToCalendarAs?: (c: ButlerCase, account: string) => void;
 }
 
 const Label = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
@@ -146,7 +148,7 @@ export default function CaseDetail(p: CaseDetailProps) {
                 {c.addressedToMe === 'cc' && <Chip label="Cc" cls="bg-card-2 text-ink-3 border-hairline" />}
                 {c.addressedToMe === 'list' && <Chip label="ML" cls="bg-card-2 text-ink-3 border-hairline" />}
               </div>
-              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onAddVia={p.onAddToCalendarVia} onCopy={p.onCalendarCopy} onRemove={p.onRemoveFromCalendar} />}
+              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onAddVia={p.onAddToCalendarVia} onCopy={p.onCalendarCopy} onRemove={p.onRemoveFromCalendar} googleAccounts={p.googleAccounts} onAddAs={p.onAddToCalendarAs} />}
             </div>
           </header>
 
@@ -223,9 +225,10 @@ export default function CaseDetail(p: CaseDetailProps) {
 
 // ---------- 予定(カレンダー) ----------
 
-function EventRow({ c, busy, onAdd, onAddVia, onCopy, onRemove }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onAddVia?: (c: ButlerCase, target: 'google' | 'emclient') => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void; onRemove?: (c: ButlerCase) => void }) {
+function EventRow({ c, busy, onAdd, onAddVia, onCopy, onRemove, googleAccounts, onAddAs }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onAddVia?: (c: ButlerCase, target: 'google' | 'emclient') => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void; onRemove?: (c: ButlerCase) => void; googleAccounts?: string[]; onAddAs?: (c: ButlerCase, account: string) => void }) {
   const ev = c.event!;
   const status = c.calendarStatus ?? 'unknown';
+  const multi = (googleAccounts?.length ?? 0) > 1;
   return (
     <div className="mt-1 flex items-center gap-1.5 flex-wrap text-[12px]">
       <span className="text-ink-3">{Icon.calendar}</span>
@@ -233,7 +236,7 @@ function EventRow({ c, busy, onAdd, onAddVia, onCopy, onRemove }: { c: ButlerCas
         <span className="tnum">{fmtEvent(ev)}</span> {ev.title}{ev.location ? <span className="text-ink-2"> @{ev.location}</span> : null}
       </span>
       {status === 'missing' && <Chip label="カレンダー未登録" cls="bg-danger-soft text-danger border-danger/30" />}
-      {status === 'registered' && <Chip label={`登録済み${c.calendarMatch ? `: ${c.calendarMatch}` : ''}`} cls="bg-ok-soft text-ok border-ok/30" />}
+      {status === 'registered' && <Chip label={`登録済み${c.calendarMatch ? `: ${c.calendarMatch}` : ''}${c.calendarEventAccount ? `(${c.calendarEventAccount})` : ''}`} cls="bg-ok-soft text-ok border-ok/30" />}
       {status === 'registered' && c.calendarEventId && (
         <>
           {c.calendarEventLink && <GhostButton onClick={() => void window.electronAPI.openExternalUrl(c.calendarEventLink!)} title="Google カレンダーで開く">開く</GhostButton>}
@@ -243,7 +246,19 @@ function EventRow({ c, busy, onAdd, onAddVia, onCopy, onRemove }: { c: ButlerCas
       {status === 'unknown' && <Chip label="カレンダー未確認" cls="bg-card-2 text-ink-3 border-hairline" />}
       {status === 'missing' && (
         <>
-          <PrimaryButton size="sm" onClick={() => onAdd(c)} disabled={busy} title="Google カレンダーの予定作成画面を、件名・日時・場所を埋めて開きます(保存を押すだけ)">{Icon.calendar}Google カレンダーに登録</PrimaryButton>
+          <PrimaryButton size="sm" onClick={() => onAdd(c)} disabled={busy} title="Google カレンダーに登録します(受け取ったアカウントに合わせて自動で振り分け)">{Icon.calendar}Google カレンダーに登録</PrimaryButton>
+          {multi && onAddAs && (
+            <select
+              value=""
+              onChange={(e) => { if (e.target.value) onAddAs(c, e.target.value); }}
+              disabled={busy}
+              className="app-no-drag h-7 px-1.5 text-[11.5px] bg-card border border-hairline rounded-md text-ink-2"
+              title="入れるアカウントを選んで登録"
+            >
+              <option value="">アカウントを選んで登録…</option>
+              {googleAccounts!.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+          )}
           <GhostButton onClick={() => onAddVia?.(c, 'emclient')} disabled={busy} title="ICS を作って eM Client の登録ダイアログを開きます">eM Client</GhostButton>
           <GhostButton onClick={() => onCopy(c, 'chatgpt')} disabled={busy} title="予定の文面をコピーして ChatGPT を開きます(貼り付けて登録を頼む)">ChatGPT</GhostButton>
         </>

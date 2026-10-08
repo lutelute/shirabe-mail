@@ -1,8 +1,8 @@
-// === Google カレンダー(OAuth 2.0 / デスクトップアプリ・PKCE・ループバック) ===
+// === Google カレンダー(OAuth 2.0 / デスクトップアプリ・PKCE・ループバック、複数アカウント) ===
 //
-// 先生の Google Cloud で作った「デスクトップアプリ」用 OAuth クライアント(Client ID / Secret)で認可し、
-// リフレッシュトークンを safeStorage で暗号化して userData/google-auth.json に置く。
-// 以後は相棒が予定を直接 Google カレンダーに入れる(取り消しは予定の削除)。
+// 先生の Google Cloud で作った「デスクトップアプリ」用 OAuth クライアント(Client ID / Secret)で、
+// 複数の Google アカウント(例: lutebass@gmail.com と lute@g.u-fukui.ac.jp)を認可できる。
+// リフレッシュトークンと Client Secret は safeStorage で暗号化して userData/google-auth.json に置く。
 
 import * as fs from 'fs';
 import * as http from 'http';
@@ -15,13 +15,18 @@ export const GOOGLE_SCOPES = [
   'https://www.googleapis.com/auth/calendar.calendarlist.readonly',
 ];
 
-export interface GoogleAuthStore {
-  clientId: string;
-  clientSecret: string;     // 暗号化済み(enc:v1:…)で保存
-  refreshToken: string;     // 暗号化済みで保存
-  email: string;            // 認可したアカウント(primary カレンダーの id)
-  calendarId: string;       // 既定 'primary'
+interface GoogleAccountRecord {
+  email: string;
+  refreshToken: string;   // 暗号化済み
+  calendarId: string;     // 既定 'primary'
   connectedAt: string;
+}
+
+interface GoogleAuthStoreV2 {
+  version: 2;
+  clientId: string;
+  clientSecret: string;   // 暗号化済み
+  accounts: GoogleAccountRecord[];
 }
 
 export interface GoogleCalendarDeps {
@@ -34,44 +39,117 @@ export interface GoogleCalendarDeps {
 
 export interface GoogleStatus {
   configured: boolean;      // Client ID がある
-  connected: boolean;       // リフレッシュトークンがある
+  connected: boolean;       // 1 つ以上のアカウントを認可済み
+  accounts: Array<{ email: string; calendarId: string }>;
+  clientId: string;
+  // 互換(最初のアカウント)
   email: string;
   calendarId: string;
-  clientId: string;
 }
 
 const b64url = (buf: Buffer) => buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 
-export function createGoogleCalendar(deps: GoogleCalendarDeps) {
-  let accessToken: { token: string; exp: number } | null = null;
+function domainOf(email: string): string {
+  const i = email.lastIndexOf('@');
+  return i >= 0 ? email.slice(i + 1).toLowerCase() : '';
+}
 
-  function load(): GoogleAuthStore | null {
+/** メールの受信アカウントから、予定を入れる Google アカウントを選ぶ(純関数) */
+export function chooseGoogleAccount(connected: string[], mailAccount: string, preferred?: string): string | null {
+  if (connected.length === 0) return null;
+  if (preferred && connected.includes(preferred)) return preferred;
+  const mail = (mailAccount || '').toLowerCase();
+  if (connected.includes(mail)) return mail;
+  const d = domainOf(mail);
+  // 大学(u-fukui.ac.jp / g.u-fukui.ac.jp)同士を寄せる
+  const org = (x: string) => x.replace(/^g\./, '');
+  const sameOrg = connected.find((e) => org(domainOf(e)) === org(d) || domainOf(e).endsWith(`.${org(d)}`) || org(d).endsWith(`.${org(domainOf(e))}`));
+  if (sameOrg) return sameOrg;
+  // 個人(gmail.com)なら gmail のアカウント
+  if (d === 'gmail.com') return connected.find((e) => domainOf(e) === 'gmail.com') ?? connected[0];
+  return connected[0];
+}
+
+export function createGoogleCalendar(deps: GoogleCalendarDeps) {
+  const accessTokens = new Map<string, { token: string; exp: number }>();
+
+  function load(): GoogleAuthStoreV2 | null {
     try {
-      const raw = JSON.parse(fs.readFileSync(deps.storePath, 'utf-8')) as GoogleAuthStore;
-      return raw && raw.clientId ? raw : null;
+      const raw = JSON.parse(fs.readFileSync(deps.storePath, 'utf-8')) as Partial<GoogleAuthStoreV2> & { refreshToken?: string; email?: string; calendarId?: string; connectedAt?: string };
+      if (!raw || !raw.clientId) return null;
+      if (raw.version === 2 && Array.isArray(raw.accounts)) return raw as GoogleAuthStoreV2;
+      // v1(単一アカウント)からの移行
+      const accounts: GoogleAccountRecord[] = raw.refreshToken
+        ? [{ email: raw.email ?? '', refreshToken: raw.refreshToken, calendarId: raw.calendarId || 'primary', connectedAt: raw.connectedAt ?? new Date().toISOString() }]
+        : [];
+      return { version: 2, clientId: raw.clientId, clientSecret: raw.clientSecret ?? '', accounts };
     } catch {
       return null;
     }
   }
-  function save(s: GoogleAuthStore): void {
+  function save(s: GoogleAuthStoreV2): void {
     fs.writeFileSync(deps.storePath, JSON.stringify(s, null, 2), { encoding: 'utf-8', mode: 0o600 });
   }
 
   function status(): GoogleStatus {
     const s = load();
+    const accounts = (s?.accounts ?? []).filter((a) => a.refreshToken).map((a) => ({ email: a.email, calendarId: a.calendarId || 'primary' }));
     return {
       configured: !!s?.clientId,
-      connected: !!s?.refreshToken,
-      email: s?.email ?? '',
-      calendarId: s?.calendarId || 'primary',
+      connected: accounts.length > 0,
+      accounts,
       clientId: s?.clientId ?? '',
+      email: accounts[0]?.email ?? '',
+      calendarId: accounts[0]?.calendarId ?? 'primary',
     };
   }
 
-  /** Client ID / Secret を受け取り、ブラウザで認可 → コードを受け取り → トークン交換 */
-  async function connect(clientId: string, clientSecret: string, loginHint?: string): Promise<GoogleStatus> {
-    clientId = clientId.trim();
-    clientSecret = clientSecret.trim();
+  async function tokenRequest(body: Record<string, string>): Promise<{ access_token: string; expires_in: number; refresh_token?: string }> {
+    const res = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams(body).toString(),
+    });
+    const j = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string; error?: string; error_description?: string };
+    if (!res.ok || !j.access_token) {
+      if (j.error === 'invalid_grant') throw new Error('Google の認可が切れました。設定 → 相棒 → Google カレンダーで、そのアカウントを認可し直してください');
+      throw new Error(`トークンを取得できませんでした: ${j.error_description || j.error || res.status}`);
+    }
+    return { access_token: j.access_token, expires_in: j.expires_in ?? 3600, refresh_token: j.refresh_token };
+  }
+
+  async function tokenFor(email: string): Promise<string> {
+    const cached = accessTokens.get(email);
+    if (cached && cached.exp > Date.now()) return cached.token;
+    const s = load();
+    const acc = s?.accounts.find((a) => a.email === email && a.refreshToken);
+    if (!s || !acc) throw new Error(`${email} は Google カレンダーにつないでいません`);
+    const t = await tokenRequest({ client_id: s.clientId, client_secret: deps.decrypt(s.clientSecret), refresh_token: deps.decrypt(acc.refreshToken), grant_type: 'refresh_token' });
+    accessTokens.set(email, { token: t.access_token, exp: Date.now() + (t.expires_in - 60) * 1000 });
+    return t.access_token;
+  }
+
+  async function apiWith<T>(accessToken: string, method: string, url: string, body?: unknown): Promise<T> {
+    const res = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${accessToken}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (res.status === 204) return undefined as T;
+    const j = (await res.json().catch(() => ({}))) as T & { error?: { message?: string } };
+    if (!res.ok) throw new Error(`Google カレンダー: ${(j as { error?: { message?: string } }).error?.message ?? res.status}`);
+    return j;
+  }
+  const api = async <T>(email: string, method: string, url: string, body?: unknown) => apiWith<T>(await tokenFor(email), method, url, body);
+
+  /**
+   * アカウントを認可して追加(同じアカウントなら更新)。
+   * clientId/secret は初回だけ必要。2 つ目以降は保存済みのクライアントを使う。
+   */
+  async function connect(clientIdIn?: string, clientSecretIn?: string, loginHint?: string): Promise<GoogleStatus> {
+    const prev = load();
+    const clientId = (clientIdIn ?? '').trim() || prev?.clientId || '';
+    const clientSecret = (clientSecretIn ?? '').trim() || (prev?.clientSecret ? deps.decrypt(prev.clientSecret) : '');
     if (!/\.apps\.googleusercontent\.com$/.test(clientId)) throw new Error('Client ID の形式が違います(…apps.googleusercontent.com)');
     if (!clientSecret) throw new Error('Client Secret が空です');
 
@@ -80,6 +158,7 @@ export function createGoogleCalendar(deps: GoogleCalendarDeps) {
     const state = b64url(crypto.randomBytes(16));
 
     const { code, redirectUri } = await new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
+      let redirectUri = '';
       const server = http.createServer((req, res) => {
         try {
           const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -98,7 +177,6 @@ export function createGoogleCalendar(deps: GoogleCalendarDeps) {
           reject(e as Error);
         }
       });
-      let redirectUri = '';
       const timer = setTimeout(() => { server.close(); reject(new Error('5 分以内に認可が終わりませんでした')); }, 5 * 60_000);
       server.listen(0, '127.0.0.1', () => {
         const port = (server.address() as AddressInfo).port;
@@ -112,107 +190,73 @@ export function createGoogleCalendar(deps: GoogleCalendarDeps) {
           code_challenge_method: 'S256',
           state,
           access_type: 'offline',
-          prompt: 'consent',
+          prompt: 'select_account consent',
         });
         if (loginHint) q.set('login_hint', loginHint);
         void deps.openExternal(`https://accounts.google.com/o/oauth2/v2/auth?${q.toString()}`);
       });
     });
 
-    const tok = await tokenRequest({
-      code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri,
-      grant_type: 'authorization_code', code_verifier: verifier,
-    });
-    if (!tok.refresh_token) throw new Error('リフレッシュトークンが返りませんでした(もう一度「Google で認可」を)');
-    accessToken = { token: tok.access_token, exp: Date.now() + (tok.expires_in - 60) * 1000 };
-
-    // 認可したアカウント = primary カレンダーの id
+    const tok = await tokenRequest({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code', code_verifier: verifier });
+    if (!tok.refresh_token) throw new Error('リフレッシュトークンが返りませんでした(もう一度認可してください)');
     let email = '';
     try {
-      const prim = await api<{ id: string }>('GET', 'https://www.googleapis.com/calendar/v3/users/me/calendarList/primary');
+      const prim = await apiWith<{ id: string }>(tok.access_token, 'GET', 'https://www.googleapis.com/calendar/v3/users/me/calendarList/primary');
       email = prim.id;
     } catch (e) {
       deps.log(`[google] primary lookup failed: ${(e as Error).message}`);
     }
+    if (!email) throw new Error('認可したアカウントのカレンダーが読めませんでした');
+    accessTokens.set(email, { token: tok.access_token, exp: Date.now() + (tok.expires_in - 60) * 1000 });
+
+    const base: GoogleAuthStoreV2 = prev && prev.clientId === clientId
+      ? prev
+      : { version: 2, clientId, clientSecret: '', accounts: [] };
+    const others = base.accounts.filter((a) => a.email !== email);
+    const old = base.accounts.find((a) => a.email === email);
     save({
+      version: 2,
       clientId,
       clientSecret: deps.encrypt(clientSecret),
-      refreshToken: deps.encrypt(tok.refresh_token),
-      email,
-      calendarId: 'primary',
-      connectedAt: new Date().toISOString(),
+      accounts: [...others, { email, refreshToken: deps.encrypt(tok.refresh_token), calendarId: old?.calendarId || 'primary', connectedAt: new Date().toISOString() }],
     });
     return status();
   }
 
-  function disconnect(): void {
+  function disconnect(email?: string): GoogleStatus {
     const s = load();
-    if (s?.refreshToken) {
-      // 失効は best effort
-      const rt = deps.decrypt(s.refreshToken);
+    if (!s) return status();
+    const targets = email ? s.accounts.filter((a) => a.email === email) : s.accounts;
+    for (const a of targets) {
+      if (!a.refreshToken) continue;
+      const rt = deps.decrypt(a.refreshToken);
       void fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(rt)}`, { method: 'POST' }).catch(() => undefined);
+      accessTokens.delete(a.email);
     }
-    if (s) save({ ...s, refreshToken: '', email: '' });
-    accessToken = null;
+    save({ ...s, accounts: email ? s.accounts.filter((a) => a.email !== email) : [] });
+    return status();
   }
 
-  async function tokenRequest(body: Record<string, string>): Promise<{ access_token: string; expires_in: number; refresh_token?: string }> {
-    const res = await fetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(body).toString(),
-    });
-    const j = (await res.json()) as { access_token?: string; expires_in?: number; refresh_token?: string; error?: string; error_description?: string };
-    if (!res.ok || !j.access_token) {
-      if (j.error === 'invalid_grant') throw new Error('Google の認可が切れました。設定 → 相棒 → Google カレンダーで「Google で認可」をやり直してください');
-      throw new Error(`トークンを取得できませんでした: ${j.error_description || j.error || res.status}`);
-    }
-    return { access_token: j.access_token, expires_in: j.expires_in ?? 3600, refresh_token: j.refresh_token };
-  }
-
-  async function token(): Promise<string> {
-    if (accessToken && accessToken.exp > Date.now()) return accessToken.token;
-    const s = load();
-    if (!s?.refreshToken) throw new Error('Google カレンダーとまだつないでいません');
-    const t = await tokenRequest({
-      client_id: s.clientId, client_secret: deps.decrypt(s.clientSecret),
-      refresh_token: deps.decrypt(s.refreshToken), grant_type: 'refresh_token',
-    });
-    accessToken = { token: t.access_token, exp: Date.now() + (t.expires_in - 60) * 1000 };
-    return t.access_token;
-  }
-
-  async function api<T>(method: string, url: string, body?: unknown): Promise<T> {
-    const res = await fetch(url, {
-      method,
-      headers: { Authorization: `Bearer ${await token()}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (res.status === 204) return undefined as T;
-    const j = (await res.json().catch(() => ({}))) as T & { error?: { message?: string } };
-    if (!res.ok) throw new Error(`Google カレンダー: ${(j as { error?: { message?: string } }).error?.message ?? res.status}`);
-    return j;
-  }
-
-  async function listCalendars(): Promise<Array<{ id: string; summary: string; primary: boolean; writable: boolean }>> {
-    const j = await api<{ items?: Array<{ id: string; summary: string; primary?: boolean; accessRole?: string }> }>('GET', 'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=100');
+  async function listCalendars(email: string): Promise<Array<{ id: string; summary: string; primary: boolean; writable: boolean }>> {
+    const j = await api<{ items?: Array<{ id: string; summary: string; primary?: boolean; accessRole?: string }> }>(email, 'GET', 'https://www.googleapis.com/calendar/v3/users/me/calendarList?maxResults=100');
     return (j.items ?? []).map((c) => ({ id: c.id, summary: c.summary, primary: !!c.primary, writable: c.accessRole === 'owner' || c.accessRole === 'writer' }));
   }
 
-  function setCalendar(calendarId: string): void {
+  function setCalendar(email: string, calendarId: string): GoogleStatus {
     const s = load();
-    if (s) save({ ...s, calendarId: calendarId || 'primary' });
+    if (s) save({ ...s, accounts: s.accounts.map((a) => (a.email === email ? { ...a, calendarId: calendarId || 'primary' } : a)) });
+    return status();
   }
 
-  async function insertEvent(ev: CaseEvent & { description?: string }): Promise<{ id: string; htmlLink: string; calendarId: string }> {
-    const s = load();
-    const calendarId = s?.calendarId || 'primary';
-    const j = await api<{ id: string; htmlLink: string }>('POST', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, eventBody(ev));
-    return { id: j.id, htmlLink: j.htmlLink, calendarId };
+  async function insertEvent(email: string, ev: CaseEvent & { description?: string }): Promise<{ id: string; htmlLink: string; calendarId: string; email: string }> {
+    const acc = load()?.accounts.find((a) => a.email === email);
+    const calendarId = acc?.calendarId || 'primary';
+    const j = await api<{ id: string; htmlLink: string }>(email, 'POST', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, eventBody(ev));
+    return { id: j.id, htmlLink: j.htmlLink, calendarId, email };
   }
 
-  async function deleteEvent(calendarId: string, eventId: string): Promise<void> {
-    await api<void>('DELETE', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
+  async function deleteEvent(email: string, calendarId: string, eventId: string): Promise<void> {
+    await api<void>(email, 'DELETE', `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`);
   }
 
   return { status, connect, disconnect, listCalendars, setCalendar, insertEvent, deleteEvent };
@@ -241,7 +285,7 @@ export function eventBody(ev: CaseEvent & { description?: string }): Record<stri
     const me = (ev.end ?? '').match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/);
     if (me) endDT = `${me[1]}T${me[2]}:00`;
     else {
-      const d = new Date(`${startDT}`);
+      const d = new Date(startDT);
       d.setHours(d.getHours() + 1);
       endDT = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}T${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
     }
