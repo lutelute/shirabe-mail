@@ -29,6 +29,7 @@ import { tidyToArchive, restoreToInbox, markAnswered, appendToSent, appendToDraf
 import { sendMail, verifySmtp, composeBody, replySubject, friendlySmtpError, buildRawMessage } from './services/mail-sender';
 import { buildIcs, googleCalendarTemplateUrl } from './services/calendar-ics';
 import { createGoogleCalendar, chooseGoogleAccount } from './services/google-calendar';
+import { createClaudeGcal } from './services/claude-gcal';
 import { loadIndex, saveIndex, upsertTask, markTask, ensureTaskCli, indexPath } from './services/task-cli';
 import type { QuotedOriginal } from './services/mail-sender';
 import { normalizeOutbox, enqueue, cancel, expedite, update as updateOutbox, dueItems, prune, visibleItems } from './services/outbox';
@@ -56,6 +57,8 @@ export interface PartnerHost {
   defaultCalendarAccount: () => string;   // 予定が実際に入っている Google アカウント(自動選択)
   encrypt: (s: string) => string;         // safeStorage
   decrypt: (s: string) => string;
+  claudeCliPath: string;
+  claudeEnv: () => Record<string, string>;
   log: (m: string) => void;
 }
 
@@ -69,6 +72,7 @@ export interface Partner {
   reschedule: () => void;
   getState: () => PartnerState;
   stop: () => void;
+  note: (text: string) => void;   // 日誌に一行残して画面へ
 }
 
 const OUTBOX_TICK_MS = 20_000;
@@ -116,18 +120,43 @@ export function createPartner(host: PartnerHost): Partner {
     log: host.log,
   });
 
-  /** どの Google アカウントに入れるか: 指定 → 設定 → 受信アカウントに合わせる */
+  // Claude の Google カレンダー連携(claude.ai コネクタ)。既定の書き込み経路
+  const claudeGcal = createClaudeGcal({
+    cliPath: host.claudeCliPath,
+    env: host.claudeEnv(),
+    workDir: path.join(host.userDataDir, 'gcal-cwd'),
+    log: host.log,
+  });
+
+  function calendarVia(): 'claude' | 'oauth' {
+    const s = host.loadSettings();
+    if (s.calendarVia === 'oauth' && google.status().connected) return 'oauth';
+    return 'claude';
+  }
+
+  /** 登録先の候補(Claude 連携: calendarTargets / OAuth: 認可済みアカウント) */
+  function calendarTargetList(): string[] {
+    if (calendarVia() === 'oauth') return google.status().accounts.map((a) => a.email);
+    const t = host.loadSettings().calendarTargets ?? [];
+    return t.length > 0 ? t : ['lute@u-fukui.ac.jp', 'lutebass@gmail.com'];
+  }
+
+  /** どこに入れるか: 指定 → 設定 → 受信アカウントに合わせる */
   function googleAccountFor(c: ButlerCase, explicit?: string): string | null {
-    const connected = google.status().accounts.map((a) => a.email);
-    return chooseGoogleAccount(connected, c.accountEmail, explicit || host.loadSettings().calendarGoogleAccount || undefined);
+    const s = host.loadSettings();
+    return chooseGoogleAccount(calendarTargetList(), c.accountEmail, explicit || s.calendarGoogleAccount || undefined);
   }
 
   /** 案件の予定を Google カレンダーに直接入れ、案件に記録する */
   async function insertCaseEvent(c: ButlerCase, auto: boolean, explicit?: string): Promise<{ id: string; htmlLink: string; calendarId: string; email: string }> {
     const ev = c.event!;
-    const account = googleAccountFor(c, explicit);
-    if (!account) throw new Error('Google カレンダーにつないだアカウントがありません');
-    const r = await google.insertEvent(account, { ...ev, description: `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)` });
+    const target = googleAccountFor(c, explicit);
+    if (!target) throw new Error('予定を入れる Google カレンダーが決まっていません');
+    const via = calendarVia();
+    const description = `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)`;
+    const r = via === 'oauth'
+      ? await google.insertEvent(target, { ...ev, description })
+      : { ...(await claudeGcal.createEvent(target, { ...ev, description })), email: target };
     withCase(c.id, (cc) => {
       cc.calendarStatus = 'registered';
       cc.calendarMatch = ev.title;
@@ -135,6 +164,7 @@ export function createPartner(host: PartnerHost): Partner {
       cc.calendarEventCalendarId = r.calendarId;
       cc.calendarEventAccount = r.email;
       cc.calendarEventLink = r.htmlLink;
+      cc.calendarEventVia = via;
     });
     journal({ kind: 'decided', text: `Google カレンダー(${r.email})に登録${auto ? '(自動)' : ''}: ${ev.title}(${ev.start})`, caseId: c.id, accountEmail: c.accountEmail });
     return r;
@@ -977,7 +1007,7 @@ export function createPartner(host: PartnerHost): Partner {
       const target = params.target ?? settings.calendarTarget ?? 'google';
       const description = `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}`;
       try {
-        if (target === 'google' && google.status().connected) {
+        if (target === 'google' && (calendarVia() === 'claude' || google.status().connected)) {
           const r = await insertCaseEvent(c, false, params.account);
           pushState();
           return { status: 'done', target, inserted: true, link: r.htmlLink, account: r.email };
@@ -1010,9 +1040,13 @@ export function createPartner(host: PartnerHost): Partner {
       if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
       if (!c.calendarEventId || !c.calendarEventCalendarId) return { status: 'error', error: '相棒が登録した予定ではありません' };
       try {
-        const account = c.calendarEventAccount || google.status().accounts[0]?.email;
-        if (!account) throw new Error('Google カレンダーとつながっていません');
-        await google.deleteEvent(account, c.calendarEventCalendarId, c.calendarEventId);
+        if (c.calendarEventVia === 'oauth') {
+          const account = c.calendarEventAccount || google.status().accounts[0]?.email;
+          if (!account) throw new Error('Google カレンダーとつながっていません');
+          await google.deleteEvent(account, c.calendarEventCalendarId, c.calendarEventId);
+        } else {
+          await claudeGcal.deleteEvent(c.calendarEventCalendarId, c.calendarEventId);
+        }
         withCase(c.id, (cc) => { cc.calendarStatus = 'missing'; cc.calendarMatch = undefined; cc.calendarEventId = undefined; cc.calendarEventCalendarId = undefined; cc.calendarEventAccount = undefined; cc.calendarEventLink = undefined; });
         journal({ kind: 'cancelled', text: `Google カレンダーから取り消し: ${c.event?.title ?? c.subject}`, caseId: c.id, accountEmail: c.accountEmail });
         pushState();
@@ -1023,6 +1057,10 @@ export function createPartner(host: PartnerHost): Partner {
     });
 
     ipcMain.handle('google:status', () => google.status());
+    ipcMain.handle('calendar:targets', () => ({ via: calendarVia(), targets: calendarTargetList() }));
+    ipcMain.handle('calendar:listViaClaude', async () => {
+      try { return { status: 'done', calendars: await claudeGcal.listCalendars() }; } catch (err) { return { status: 'error', error: (err as Error).message }; }
+    });
     ipcMain.handle('google:connect', async (_e, params: { clientId?: string; clientSecret?: string; loginHint?: string }) => {
       try {
         const before = new Set(google.status().accounts.map((a) => a.email));
@@ -1098,7 +1136,8 @@ export function createPartner(host: PartnerHost): Partner {
       followUpsPath: FOLLOWUPS_PATH,
       journal,
       autoAddEvent: async (c) => {
-        if (!host.loadSettings().calendarAutoAdd || !google.status().connected || !c.event) return false;
+        if (!host.loadSettings().calendarAutoAdd || !c.event) return false;
+        if (calendarVia() === 'oauth' && !google.status().connected) return false;
         try { await insertCaseEvent(c, true); return true; } catch (err) { host.log(`[google] auto add failed: ${(err as Error).message}`); return false; }
       },
     };
@@ -1113,6 +1152,7 @@ export function createPartner(host: PartnerHost): Partner {
     startScheduler,
     reschedule: startScheduler,
     getState,
+    note: (text) => { journal({ kind: 'error', text }); pushState(); },
     stop: () => {
       clearSchedule();
       if (outboxTimer) { clearInterval(outboxTimer); outboxTimer = null; }

@@ -35,6 +35,7 @@ import { runButlerPipeline } from './services/pipeline';
 import type { PipelineDeps, ButlerProgress } from './services/pipeline';
 import { getCandidateMails, getSenderStats, getThreadContext, getMailBodies, getSentExemplars } from './services/mail-intel';
 import { createClaudeRunner } from './services/claude-runner';
+import { createCodexRunner, createEngineRunner } from './services/codex-runner';
 import type { ClaudeRunner } from './services/claude-runner';
 import { buildJudgmentContext, classifyCases, draftReply, writeBrief, extractEvents } from './services/butler-brain';
 import type { JudgmentContext } from './services/butler-brain';
@@ -2272,15 +2273,40 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
   const BUTLER_WORKDIR = path.join(app.getPath('userData'), 'butler-cwd');
 
   let butlerRunner: ClaudeRunner | null = null;
+  let lastCodexFallbackLog = 0;
   function getButlerRunner(): ClaudeRunner {
     if (!butlerRunner) {
-      butlerRunner = createClaudeRunner({
+      const claude = createClaudeRunner({
         cliPath: CLAUDE_CLI_PATH,
         env: cleanEnvForClaude(),
         workDir: BUTLER_WORKDIR,
         concurrency: 3,
         log: (m) => console.log(m),
         getEffort: () => loadSettings().butlerEffort || 'xhigh',
+      });
+      const codexPath = ['/opt/homebrew/bin/codex', '/usr/local/bin/codex', path.join(os.homedir(), '.local', 'bin', 'codex')].find((p) => fs.existsSync(p)) ?? '';
+      const codexEnv = cleanEnvForClaude();
+      codexEnv.PATH = `/opt/homebrew/bin:/usr/local/bin:${codexEnv.PATH ?? ''}`;
+      const codex = createCodexRunner({
+        cliPath: codexPath,
+        env: codexEnv,
+        workDir: path.join(app.getPath('userData'), 'codex-cwd'),
+        concurrency: 2,
+        log: (m) => console.log(m),
+        getModel: () => loadSettings().codexModel || undefined,
+        getEffort: () => loadSettings().butlerEffort || 'xhigh',
+      });
+      butlerRunner = createEngineRunner({
+        claude,
+        codex,
+        getEngine: () => loadSettings().aiEngine ?? 'claude',
+        claudeModelFor: () => loadSettings().butlerModel || 'opus',
+        onFallback: (reason) => {
+          // 同じ理由で日誌を埋めないよう 10 分に 1 回
+          if (Date.now() - lastCodexFallbackLog < 600_000) return;
+          lastCodexFallbackLog = Date.now();
+          partnerRef?.note(`Codex が使えなかったので Claude で続けました: ${reason}`);
+        },
       });
     }
     return butlerRunner;
@@ -2351,6 +2377,8 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
     defaultCalendarAccount: () => pickCalendarAccount(),
     encrypt: encryptSecret,
     decrypt: decryptSecret,
+    claudeCliPath: CLAUDE_CLI_PATH,
+    claudeEnv: () => cleanEnvForClaude(),
     log: (m) => console.log(m),
   });
   partnerRef = partner;

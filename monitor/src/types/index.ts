@@ -486,10 +486,14 @@ export interface AppSettings {
   // 夜間執事 v2(案件ベース)
   butlerModel: ButlerModel;              // 分類に使うモデル(Claude Code CLI経由・APIキー不要)
   butlerDraftModel: ButlerModel;         // 返信下書きに使うモデル
-  butlerEffort: ButlerEffort;            // 考える深さ(Claude CLI --effort)。既定 xhigh
+  butlerEffort: ButlerEffort;            // 考える深さ(Claude CLI --effort / Codex reasoning effort)。既定 xhigh
+  aiEngine: AiEngine;                    // 相棒の頭脳: Claude(既定)/ Codex(失敗時は Claude に切り替え)
+  codexModel: string;                    // Codex のモデル(空 = Codex の既定)
   calendarTarget: CalendarTarget;        // 予定の登録先(既定 Google カレンダー)
   calendarGoogleAccount: string;         // Google カレンダーのアカウント(空 = 予定が入っているアカウントを自動)
   calendarAutoAdd: boolean;              // 認可済みなら、見つけた予定を相棒が自動で登録する
+  calendarVia: 'claude' | 'oauth';       // Google への書き込み方法: Claude の Google カレンダー連携(既定・設定不要)/ 自前 OAuth
+  calendarTargets: string[];             // 登録先カレンダー(Claude 連携のとき)。受信アカウントで振り分け。既定 [lute@u-fukui.ac.jp, lutebass@gmail.com]
   butlerInitialDays: number;             // 初回実行で遡る日数(2回目以降は前回実行以降)
   butlerMaxCasesPerRun: number;          // 1回でAI判定する案件数の上限
   butlerMaxDraftsPerRun: number;         // 1回で用意する返信下書きの上限
@@ -540,9 +544,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
   butlerModel: 'opus',
   butlerDraftModel: 'opus',
   butlerEffort: 'xhigh',
+  aiEngine: 'claude',
+  codexModel: '',
   calendarTarget: 'google',
   calendarGoogleAccount: '',
   calendarAutoAdd: false,
+  calendarVia: 'claude',
+  calendarTargets: ['lute@u-fukui.ac.jp', 'lutebass@gmail.com'],
   butlerInitialDays: 14,
   butlerMaxCasesPerRun: 50,
   butlerMaxDraftsPerRun: 5,
@@ -563,6 +571,7 @@ export type ButlerSchedule = 'manual' | 'startup' | 'hourly' | 'daily';
 export type ButlerModel = 'haiku' | 'sonnet' | 'opus';
 export type ButlerEffort = 'medium' | 'high' | 'xhigh' | 'max';   // Claude CLI の --effort
 export type CalendarTarget = 'google' | 'emclient' | 'chatgpt';   // 予定の登録先
+export type AiEngine = 'claude' | 'codex';
 
 export interface GoogleStatus {
   configured: boolean;   // Client ID がある
@@ -683,7 +692,8 @@ export interface ButlerCase {
   calendarStatus?: 'registered' | 'missing' | 'unknown';  // カレンダーにあるか
   calendarEventId?: string;         // 相棒が Google カレンダーに直接入れた予定(取り消し用)
   calendarEventCalendarId?: string;
-  calendarEventAccount?: string;     // 入れた Google アカウント
+  calendarEventAccount?: string;     // 入れた Google アカウント / カレンダー
+  calendarEventVia?: 'claude' | 'oauth';
   calendarEventLink?: string;
   calendarMatch?: string;           // 一致した予定の件名
 }
@@ -1058,6 +1068,9 @@ export interface ElectronAPI {
   googleDisconnect: (email?: string) => Promise<GoogleStatus>;
   googleCalendars: (email: string) => Promise<{ status: string; calendars?: Array<{ id: string; summary: string; primary: boolean; writable: boolean }>; error?: string }>;
   googleSetCalendar: (email: string, calendarId: string) => Promise<GoogleStatus>;
+  // 予定の登録先(Claude 連携なら calendarTargets、OAuth なら認可済みアカウント)
+  calendarTargets: () => Promise<{ via: 'claude' | 'oauth'; targets: string[] }>;
+  calendarListViaClaude: () => Promise<{ status: string; calendars?: Array<{ id: string; summary: string }>; error?: string }>;
   partnerSaveProfile: (content: string) => Promise<void>;
   onPartnerState: (callback: (state: PartnerState) => void) => () => void;
 }

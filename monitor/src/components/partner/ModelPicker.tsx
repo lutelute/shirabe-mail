@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { AppSettings, ButlerEffort, ButlerModel } from '../../types';
+import type { AppSettings, ButlerEffort, ButlerModel, AiEngine } from '../../types';
 import { useAppContext } from '../../context/AppContext';
 
 // =====================================================================
@@ -15,7 +15,10 @@ const EFFORTS: Array<{ value: ButlerEffort; label: string; desc: string }> = [
   { value: 'max', label: 'max', desc: '最も深い・遅い' },
 ];
 
+const CODEX_MODELS = ['gpt-6-astra', 'gpt-5.5-codex'];
+
 export function modelSummary(s: AppSettings): string {
+  if (s.aiEngine === 'codex') return `Codex ${s.codexModel || '(既定)'} · ${s.butlerEffort === 'max' ? 'xhigh' : (s.butlerEffort ?? 'xhigh')}`;
   const m = MODEL_LABEL[s.butlerModel] ?? s.butlerModel;
   const d = s.butlerDraftModel !== s.butlerModel ? ` / 下書き ${MODEL_LABEL[s.butlerDraftModel] ?? s.butlerDraftModel}` : '';
   return `${m}${d} · ${s.butlerEffort ?? 'xhigh'}`;
@@ -45,6 +48,9 @@ export default function ModelPicker({ onSaved }: { onSaved?: (summary: string) =
   const setModel = (m: ButlerModel) => commit(separate ? { butlerModel: m } : { butlerModel: m, butlerDraftModel: m });
   const setDraftModel = (m: ButlerModel) => commit({ butlerDraftModel: m });
   const setEffort = (e: ButlerEffort) => commit({ butlerEffort: e });
+  const setEngine = (e: AiEngine) => commit({ aiEngine: e });
+  const engine: AiEngine = settings.aiEngine ?? 'claude';
+  const [codexModel, setCodexModel] = useState(settings.codexModel ?? '');
 
   const seg = (active: boolean) => `px-2.5 h-7 rounded-md text-[12px] border transition-colors ${active ? 'bg-primary-soft text-primary border-primary/40' : 'bg-card text-ink-2 border-hairline hover:bg-card-2 hover:text-ink'}`;
 
@@ -58,7 +64,33 @@ export default function ModelPicker({ onSaved }: { onSaved?: (summary: string) =
         {modelSummary(settings)}
       </button>
       {open && (
-        <div className="absolute right-0 top-8 z-40 w-[300px] rounded-lg border border-hairline bg-card shadow-card p-3 space-y-3 text-left">
+        <div className="absolute right-0 top-8 z-40 w-[320px] rounded-lg border border-hairline bg-card shadow-card p-3 space-y-3 text-left">
+          <div>
+            <div className="text-[10.5px] tracking-wide text-ink-3 mb-1.5">頭脳</div>
+            <div className="flex gap-1.5">
+              <button onClick={() => setEngine('claude')} className={seg(engine === 'claude')}>Claude</button>
+              <button onClick={() => setEngine('codex')} className={seg(engine === 'codex')} title="OpenAI Codex CLI(ChatGPT ログイン)。使えないときは自動で Claude に切り替えます">Codex</button>
+            </div>
+          </div>
+          {engine === 'codex' ? (
+            <div>
+              <div className="text-[10.5px] tracking-wide text-ink-3 mb-1.5">Codex のモデル</div>
+              <div className="flex gap-1.5 flex-wrap">
+                {CODEX_MODELS.map((m) => (
+                  <button key={m} onClick={() => { setCodexModel(m); void commit({ codexModel: m }); }} className={seg((settings.codexModel ?? '') === m)}>{m}</button>
+                ))}
+                <button onClick={() => { setCodexModel(''); void commit({ codexModel: '' }); }} className={seg(!settings.codexModel)} title="~/.codex/config.toml の既定">既定</button>
+              </div>
+              <input
+                value={codexModel}
+                onChange={(e) => setCodexModel(e.target.value)}
+                onBlur={() => { if (codexModel !== (settings.codexModel ?? '')) void commit({ codexModel: codexModel.trim() }); }}
+                placeholder="モデル名を直接入力(例 gpt-6-astra)"
+                className="mt-1.5 w-full h-7 px-2 text-[12px] bg-card border border-hairline rounded-md text-ink"
+              />
+              <p className="mt-1.5 text-[10.5px] text-ink-3 leading-snug">Codex が上限・エラーのときは、その回だけ Claude({MODEL_LABEL[settings.butlerModel] ?? settings.butlerModel})で続けて日誌に残します。</p>
+            </div>
+          ) : (
           <div>
             <div className="text-[10.5px] tracking-wide text-ink-3 mb-1.5">{separate ? '判定のモデル' : 'モデル(判定・下書き)'}</div>
             <div className="flex gap-1.5">
@@ -81,6 +113,7 @@ export default function ModelPicker({ onSaved }: { onSaved?: (summary: string) =
               </div>
             )}
           </div>
+          )}
           <div>
             <div className="text-[10.5px] tracking-wide text-ink-3 mb-1.5">考える深さ(effort)</div>
             <div className="flex gap-1.5 flex-wrap">

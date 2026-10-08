@@ -231,7 +231,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   const [googleAccounts, setGoogleAccounts] = useState<string[]>([]);
   useEffect(() => {
     let alive = true;
-    const load = () => window.electronAPI.googleStatus().then((s) => { if (alive) setGoogleAccounts(s.accounts.map((a) => a.email)); }).catch(() => undefined);
+    const load = () => window.electronAPI.calendarTargets().then((s) => { if (alive) setGoogleAccounts(s.targets); }).catch(() => undefined);
     void load();
     const t = setInterval(load, 60_000);
     return () => { alive = false; clearInterval(t); };

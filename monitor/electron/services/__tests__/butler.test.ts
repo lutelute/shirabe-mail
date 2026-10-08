@@ -8,6 +8,8 @@ import { withSenderRule, tierFromRules, EMPTY_RULES } from '../butler-rules';
 import { bumpPriorityByDeadline, tagsFor, sortCases, mergeCarryOver, addressedToMe, runButlerPipeline, noteIdFor, reconcileFollowUps, canAutoSend, matchCalendar, titleSimilar } from '../pipeline';
 import { buildIcs, toIcsDateTime, googleCalendarTemplateUrl } from '../calendar-ics';
 import { eventBody, chooseGoogleAccount } from '../google-calendar';
+import { strictifySchema, codexEffort, codexFriendlyError, createEngineRunner } from '../codex-runner';
+import { createEventArgs } from '../claude-gcal';
 import { enqueue, cancel, expedite, dueItems, prune, visibleItems, EMPTY_OUTBOX } from '../outbox';
 import { composeBody, replySubject, formatFrom } from '../mail-sender';
 import { extractSignature } from '../mail-intel';
@@ -630,4 +632,63 @@ test('chooseGoogleAccount: explicit > same address > same org(大学) > gmail > 
   assert.equal(chooseGoogleAccount(both, 'e115562lute@gmail.com'), 'lutebass@gmail.com');   // 別の gmail → gmail
   assert.equal(chooseGoogleAccount(both, 'lute@u-fukui.ac.jp', 'lutebass@gmail.com'), 'lutebass@gmail.com'); // 明示
   assert.equal(chooseGoogleAccount(['lutebass@gmail.com'], 'lute@u-fukui.ac.jp'), 'lutebass@gmail.com');      // 1 つだけならそれ
+});
+
+
+test('strictifySchema: all required, optional → nullable, additionalProperties false (nested)', () => {
+  const s = strictifySchema({ type: 'object', properties: { a: { type: 'string' }, b: { type: 'string', enum: ['x', 'y'] }, c: { type: ['object', 'null'], properties: { d: { type: 'string' }, e: { type: 'boolean' } }, required: ['d'] }, list: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, hint: { type: 'string' } }, required: ['id'] } } }, required: ['a', 'c', 'list'] }) as any;
+  assert.deepEqual(s.required, ['a', 'b', 'c', 'list']);
+  assert.equal(s.additionalProperties, false);
+  assert.deepEqual(s.properties.b.type, ['string', 'null']);
+  assert.ok(s.properties.b.enum.includes(null));
+  assert.deepEqual(s.properties.c.required, ['d', 'e']);
+  assert.deepEqual(s.properties.c.properties.e.type, ['boolean', 'null']);
+  assert.equal(s.properties.c.additionalProperties, false);
+  assert.deepEqual(s.properties.list.items.required, ['id', 'hint']);
+  assert.deepEqual(s.properties.list.items.properties.hint.type, ['string', 'null']);
+});
+
+test('codexEffort / codexFriendlyError', () => {
+  assert.equal(codexEffort('max'), 'xhigh');
+  assert.equal(codexEffort('xhigh'), 'xhigh');
+  assert.equal(codexEffort('medium'), 'medium');
+  assert.equal(codexEffort(undefined), 'high');
+  assert.equal(codexFriendlyError('ERROR: You’ve hit your usage limit. ... try again at 8:03 PM.', 1), 'Codex の利用上限に達しています(8:03 PM に回復)');
+});
+
+test('createEngineRunner: codex ok → codex, codex fails → claude with claude model', async () => {
+  const calls: string[] = [];
+  const ok = (who: string) => ({ available: true, run: async (c: any) => { calls.push(`${who}:${c.model}`); return { ok: true, data: null, text: who, costUsd: 0, durationMs: 0, inputTokens: 0, outputTokens: 0 }; } });
+  const ng = { available: true, run: async () => { calls.push('codex:fail'); return { ok: false, data: null, text: '', costUsd: 0, durationMs: 0, inputTokens: 0, outputTokens: 0, error: 'limit' }; } };
+  let engine: 'claude' | 'codex' = 'codex';
+  let fell = '';
+  const r1 = createEngineRunner({ claude: ok('claude') as any, codex: ok('codex') as any, getEngine: () => engine, claudeModelFor: () => 'opus' });
+  assert.equal((await r1.run({ prompt: 'p', systemPrompt: 's', model: 'opus' })).text, 'codex');
+  const r2 = createEngineRunner({ claude: ok('claude') as any, codex: ng as any, getEngine: () => engine, claudeModelFor: () => 'opus', onFallback: (x) => { fell = x; } });
+  assert.equal((await r2.run({ prompt: 'p', systemPrompt: 's', model: 'opus' })).text, 'claude');
+  assert.equal(fell, 'limit');
+  engine = 'claude';
+  assert.equal((await r2.run({ prompt: 'p', systemPrompt: 's', model: 'sonnet' })).text, 'claude');
+  assert.deepEqual(calls, ['codex:opus', 'codex:fail', 'claude:opus', 'claude:sonnet']);
+});
+
+
+test('claude-gcal createEventArgs: timed / all-day / no end, and routing between 大学 and 個人 calendars', () => {
+  const a = createEventArgs('lute@u-fukui.ac.jp', { title: '役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, kind: 'meeting', location: '金沢' });
+  assert.equal(a.calendarId, 'lute@u-fukui.ac.jp');
+  assert.equal(a.startTime, '2026-10-29T17:00:00+09:00');
+  assert.equal(a.endTime, '2026-10-29T19:00:00+09:00');
+  assert.equal(a.allDay, undefined);
+  assert.equal(a.notificationLevel, 'NONE');
+  const d = createEventArgs('lutebass@gmail.com', { title: '締切', start: '2026-10-08', allDay: true, kind: 'deadline' });
+  assert.equal(d.allDay, true);
+  assert.equal(d.startTime, '2026-10-08T00:00:00+09:00');
+  assert.equal(d.endTime, '2026-10-09T00:00:00+09:00');
+  const n = createEventArgs('x', { title: 'x', start: '2026-10-08T23:30', allDay: false, kind: 'other' });
+  assert.equal(n.endTime, '2026-10-09T00:30:00+09:00');
+  const targets = ['lute@u-fukui.ac.jp', 'lutebass@gmail.com'];
+  assert.equal(chooseGoogleAccount(targets, 'lute@u-fukui.ac.jp'), 'lute@u-fukui.ac.jp');
+  assert.equal(chooseGoogleAccount(targets, 'lute@g.u-fukui.ac.jp'), 'lute@u-fukui.ac.jp');
+  assert.equal(chooseGoogleAccount(targets, 'lutebass@gmail.com'), 'lutebass@gmail.com');
+  assert.equal(chooseGoogleAccount(targets, 'e115562lute@gmail.com'), 'lutebass@gmail.com');
 });

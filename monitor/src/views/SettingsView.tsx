@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../context/AppContext';
 import GoogleCalendarConnect from '../components/settings/GoogleCalendarConnect';
+import ClaudeCalendarTargets from '../components/settings/ClaudeCalendarTargets';
 import type {
-  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel, ButlerEffort, CalendarTarget,
+  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel, ButlerEffort, CalendarTarget, AiEngine,
   PartnerMode, AccountSmtpConfig, SmtpCredentials, AccountEndpoints,
 } from '../types';
 
@@ -397,6 +398,22 @@ export default function SettingsView() {
             </div>
 
             <div className={`space-y-4 ${partnerOff ? 'opacity-50 pointer-events-none' : ''}`}>
+              {/* 頭脳(Claude / Codex) */}
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">頭脳</label>
+                <div className="flex flex-wrap gap-2 items-center">
+                  {([
+                    { value: 'claude' as AiEngine, label: 'Claude(推奨)' },
+                    { value: 'codex' as AiEngine, label: 'Codex' },
+                  ]).map((opt) => (
+                    <button key={opt.value} type="button" onClick={() => update('aiEngine', opt.value)} className={`px-3 py-1.5 text-sm rounded transition-colors ${(draft.aiEngine ?? 'claude') === opt.value ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30' : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'}`}>{opt.label}</button>
+                  ))}
+                  {(draft.aiEngine ?? 'claude') === 'codex' && (
+                    <input value={draft.codexModel ?? ''} onChange={(e) => update('codexModel', e.target.value)} placeholder="Codex のモデル(空 = 既定。例 gpt-6-astra)" className={`${inputCls} max-w-[280px]`} spellCheck={false} />
+                  )}
+                </div>
+                <p className="text-xs text-surface-500 mt-1">Codex は OpenAI の Codex CLI(ChatGPT ログイン)で動きます。上限やエラーのときは、その回だけ Claude で続けます。</p>
+              </div>
               {/* モデルと考える深さ(「今日」の画面からも変えられる) */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -445,8 +462,8 @@ export default function SettingsView() {
                     <span className="text-xs text-surface-400 flex-shrink-0">アカウント</span>
                     <select value={draft.calendarGoogleAccount ?? ''} onChange={(e) => update('calendarGoogleAccount', e.target.value)} className={inputCls}>
                       <option value="">自動(メールを受け取ったアカウントに合わせる)</option>
-                      {accounts.filter((a) => a.type === 'google').map((a) => (
-                        <option key={a.email} value={a.email}>{a.email}</option>
+                      {Array.from(new Set([...(draft.calendarTargets ?? []), ...accounts.filter((a) => a.type === 'google').map((a) => a.email)])).map((e) => (
+                        <option key={e} value={e}>{e}</option>
                       ))}
                     </select>
                   </div>
@@ -454,6 +471,17 @@ export default function SettingsView() {
                 <p className="text-xs text-surface-500 mt-1">「カレンダーに登録」で、件名・日時・場所を埋めた Google カレンダーの作成画面を開きます(保存を押すだけ)。下で Google と接続すると、画面を開かずに直接入ります。eM Client は ICS で登録ダイアログを開きます。</p>
               </div>
               {(draft.calendarTarget ?? 'google') === 'google' && (
+                <ClaudeCalendarTargets
+                  via={draft.calendarVia ?? 'claude'}
+                  onVia={(v) => update('calendarVia', v)}
+                  targets={draft.calendarTargets ?? ['lute@u-fukui.ac.jp', 'lutebass@gmail.com']}
+                  onTargets={(t) => update('calendarTargets', t)}
+                  autoAdd={!!draft.calendarAutoAdd}
+                  onAutoAdd={(v) => update('calendarAutoAdd', v)}
+                  inputCls={inputCls}
+                />
+              )}
+              {(draft.calendarTarget ?? 'google') === 'google' && (draft.calendarVia ?? 'claude') === 'oauth' && (
                 <GoogleCalendarConnect autoAdd={!!draft.calendarAutoAdd} onAutoAdd={(v) => update('calendarAutoAdd', v)} inputCls={inputCls} />
               )}
               <div>
