@@ -6,7 +6,7 @@ import { tierFor, looksLikeBulk, looksLikeSpam, normalizeDeadline, buildClassify
 import type { JudgmentContext, CaseInput } from '../butler-brain';
 import { withSenderRule, tierFromRules, EMPTY_RULES } from '../butler-rules';
 import { bumpPriorityByDeadline, tagsFor, sortCases, mergeCarryOver, addressedToMe, runButlerPipeline, noteIdFor, reconcileFollowUps, canAutoSend, matchCalendar, titleSimilar } from '../pipeline';
-import { buildIcs, toIcsDateTime } from '../calendar-ics';
+import { buildIcs, toIcsDateTime, googleCalendarTemplateUrl } from '../calendar-ics';
 import { enqueue, cancel, expedite, dueItems, prune, visibleItems, EMPTY_OUTBOX } from '../outbox';
 import { composeBody, replySubject, formatFrom } from '../mail-sender';
 import { extractSignature } from '../mail-intel';
@@ -586,4 +586,21 @@ test('runButlerPipeline: calendar cross-check marks missing events and counts th
   const d2 = await runButlerPipeline(deps2, { force: true });
   assert.equal(d2.cases![0].calendarStatus, 'registered');
   assert.equal(d2.stats?.calendarMissing, 0);
+});
+
+
+test('googleCalendarTemplateUrl: timed / all-day / authuser', () => {
+  const u = new URL(googleCalendarTemplateUrl({ title: '北陸支部役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, kind: 'meeting', location: '金沢', description: 'メモ' }, 'lutebass@gmail.com'));
+  assert.equal(u.host, 'calendar.google.com');
+  assert.equal(u.searchParams.get('action'), 'TEMPLATE');
+  assert.equal(u.searchParams.get('text'), '北陸支部役員会');
+  assert.equal(u.searchParams.get('dates'), '20261029T170000/20261029T190000');
+  assert.equal(u.searchParams.get('ctz'), 'Asia/Tokyo');
+  assert.equal(u.searchParams.get('location'), '金沢');
+  assert.equal(u.searchParams.get('authuser'), 'lutebass@gmail.com');
+  const d = new URL(googleCalendarTemplateUrl({ title: '締切', start: '2026-10-08', allDay: true, kind: 'deadline' }));
+  assert.equal(d.searchParams.get('dates'), '20261008/20261009');
+  assert.equal(d.searchParams.get('ctz'), null);
+  const n = new URL(googleCalendarTemplateUrl({ title: 'x', start: '2026-10-08T23:30', allDay: false, kind: 'other' }));
+  assert.equal(n.searchParams.get('dates'), '20261008T233000/20261009T003000');
 });

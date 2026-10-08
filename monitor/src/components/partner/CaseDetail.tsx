@@ -33,6 +33,7 @@ export interface CaseDetailProps {
   onCalendarCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void;
   onPickFolder: (c: ButlerCase) => void;
   onAddToCalendar: (c: ButlerCase) => void;
+  onAddToCalendarVia?: (c: ButlerCase, target: 'google' | 'emclient') => void;
 }
 
 const Label = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
@@ -144,7 +145,7 @@ export default function CaseDetail(p: CaseDetailProps) {
                 {c.addressedToMe === 'cc' && <Chip label="Cc" cls="bg-card-2 text-ink-3 border-hairline" />}
                 {c.addressedToMe === 'list' && <Chip label="ML" cls="bg-card-2 text-ink-3 border-hairline" />}
               </div>
-              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onCopy={p.onCalendarCopy} />}
+              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onAddVia={p.onAddToCalendarVia} onCopy={p.onCalendarCopy} />}
             </div>
           </header>
 
@@ -221,7 +222,7 @@ export default function CaseDetail(p: CaseDetailProps) {
 
 // ---------- 予定(カレンダー) ----------
 
-function EventRow({ c, busy, onAdd, onCopy }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void }) {
+function EventRow({ c, busy, onAdd, onAddVia, onCopy }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onAddVia?: (c: ButlerCase, target: 'google' | 'emclient') => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void }) {
   const ev = c.event!;
   const status = c.calendarStatus ?? 'unknown';
   return (
@@ -235,8 +236,9 @@ function EventRow({ c, busy, onAdd, onCopy }: { c: ButlerCase; busy: boolean; on
       {status === 'unknown' && <Chip label="カレンダー未確認" cls="bg-card-2 text-ink-3 border-hairline" />}
       {status === 'missing' && (
         <>
-          <PrimaryButton size="sm" onClick={() => onAdd(c)} disabled={busy} title="ICS を作って eM Client の登録ダイアログを開きます">{Icon.calendar}カレンダーに登録</PrimaryButton>
-          <GhostButton onClick={() => onCopy(c, 'chatgpt')} disabled={busy} title="予定の文面をコピーして ChatGPT を開きます(貼り付けて登録を頼む)">ChatGPT で登録</GhostButton>
+          <PrimaryButton size="sm" onClick={() => onAdd(c)} disabled={busy} title="Google カレンダーの予定作成画面を、件名・日時・場所を埋めて開きます(保存を押すだけ)">{Icon.calendar}Google カレンダーに登録</PrimaryButton>
+          <GhostButton onClick={() => onAddVia?.(c, 'emclient')} disabled={busy} title="ICS を作って eM Client の登録ダイアログを開きます">eM Client</GhostButton>
+          <GhostButton onClick={() => onCopy(c, 'chatgpt')} disabled={busy} title="予定の文面をコピーして ChatGPT を開きます(貼り付けて登録を頼む)">ChatGPT</GhostButton>
         </>
       )}
     </div>

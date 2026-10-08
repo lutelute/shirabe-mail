@@ -1,6 +1,6 @@
 {
   "name": "shirabe-mcp-server",
-  "version": "3.1.6",
+  "version": "3.1.7",
   "description": "調 MCP Server - eM Client と相棒(今日/決める/送る/返事待ち)を Claude Code から扱う",
   "type": "module",
   "scripts": {

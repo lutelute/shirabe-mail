@@ -487,6 +487,8 @@ export interface AppSettings {
   butlerModel: ButlerModel;              // 分類に使うモデル(Claude Code CLI経由・APIキー不要)
   butlerDraftModel: ButlerModel;         // 返信下書きに使うモデル
   butlerEffort: ButlerEffort;            // 考える深さ(Claude CLI --effort)。既定 xhigh
+  calendarTarget: CalendarTarget;        // 予定の登録先(既定 Google カレンダー)
+  calendarGoogleAccount: string;         // Google カレンダーのアカウント(空 = 予定が入っているアカウントを自動)
   butlerInitialDays: number;             // 初回実行で遡る日数(2回目以降は前回実行以降)
   butlerMaxCasesPerRun: number;          // 1回でAI判定する案件数の上限
   butlerMaxDraftsPerRun: number;         // 1回で用意する返信下書きの上限
@@ -537,6 +539,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   butlerModel: 'opus',
   butlerDraftModel: 'opus',
   butlerEffort: 'xhigh',
+  calendarTarget: 'google',
+  calendarGoogleAccount: '',
   butlerInitialDays: 14,
   butlerMaxCasesPerRun: 50,
   butlerMaxDraftsPerRun: 5,
@@ -556,6 +560,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
 export type ButlerSchedule = 'manual' | 'startup' | 'hourly' | 'daily';
 export type ButlerModel = 'haiku' | 'sonnet' | 'opus';
 export type ButlerEffort = 'medium' | 'high' | 'xhigh' | 'max';   // Claude CLI の --effort
+export type CalendarTarget = 'google' | 'emclient' | 'chatgpt';   // 予定の登録先
 
 // パイプラインが1通に対して下した処理の種類
 // reversible(可逆)なものは自動実行済、await_* は不可逆ゆえ承認待ち
@@ -1030,7 +1035,7 @@ export interface ElectronAPI {
   partnerHandoffCopy: (params: { caseId: string }) => Promise<{ status: string; text?: string; error?: string }>;
   partnerCalendarCopy: (params: { caseId: string; target: 'chatgpt' | 'clipboard' }) => Promise<{ status: string; text?: string; opened?: boolean; error?: string }>;
   // カレンダー
-  partnerAddToCalendar: (params: { caseId: string }) => Promise<{ status: string; path?: string; error?: string }>;
+  partnerAddToCalendar: (params: { caseId: string; target?: CalendarTarget }) => Promise<{ status: string; target?: CalendarTarget; path?: string; url?: string; account?: string; error?: string }>;
   partnerSaveProfile: (content: string) => Promise<void>;
   onPartnerState: (callback: (state: PartnerState) => void) => () => void;
 }

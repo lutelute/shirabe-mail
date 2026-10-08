@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../context/AppContext';
 import type {
-  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel, ButlerEffort,
+  AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel, ButlerEffort, CalendarTarget,
   PartnerMode, AccountSmtpConfig, SmtpCredentials, AccountEndpoints,
 } from '../types';
 
@@ -428,6 +428,29 @@ export default function SettingsView() {
                   ))}
                 </div>
                 <p className="text-xs text-surface-500 mt-1">Claude CLI の --effort。判定・下書き・申し送り・作業指示書のすべてに効きます。深いほど丁寧ですが 1 回の確認が長くなります。</p>
+              </div>
+              <div>
+                <label className="block text-sm text-surface-200 mb-1">予定の登録先</label>
+                <div className="flex flex-wrap gap-2">
+                  {([
+                    { value: 'google' as CalendarTarget, label: 'Google カレンダー(推奨)' },
+                    { value: 'emclient' as CalendarTarget, label: 'eM Client' },
+                  ]).map((opt) => (
+                    <button key={opt.value} type="button" onClick={() => update('calendarTarget', opt.value)} className={`px-3 py-1.5 text-sm rounded transition-colors ${(draft.calendarTarget ?? 'google') === opt.value ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30' : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'}`}>{opt.label}</button>
+                  ))}
+                </div>
+                {(draft.calendarTarget ?? 'google') === 'google' && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="text-xs text-surface-400 flex-shrink-0">アカウント</span>
+                    <select value={draft.calendarGoogleAccount ?? ''} onChange={(e) => update('calendarGoogleAccount', e.target.value)} className={inputCls}>
+                      <option value="">自動(予定が入っているアカウント)</option>
+                      {accounts.filter((a) => a.type === 'google').map((a) => (
+                        <option key={a.email} value={a.email}>{a.email}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <p className="text-xs text-surface-500 mt-1">「カレンダーに登録」で、件名・日時・場所を埋めた Google カレンダーの作成画面を開きます(保存を押すだけ)。eM Client は ICS で登録ダイアログを開きます。どちらも「ChatGPT」ボタンで文面コピーも可。</p>
               </div>
               <div>
                 <label className="block text-sm text-surface-200 mb-2">自動で確認する間隔</label>

@@ -2310,6 +2310,22 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
     }
   }
 
+  // 予定が実際に入っている Google アカウント(今後 60 日の予定数が最も多いもの)。1 時間キャッシュ
+  let calendarAccountCache: { at: number; email: string } | null = null;
+  function pickCalendarAccount(): string {
+    if (calendarAccountCache && Date.now() - calendarAccountCache.at < 3_600_000) return calendarAccountCache.email;
+    let best = '';
+    let bestCount = -1;
+    for (const acc of getAccounts()) {
+      if (acc.type !== 'google' || !acc.eventSubdir) continue;
+      let n = 0;
+      try { n = getEvents(acc.email, 60).length; } catch { n = 0; }
+      if (n > bestCount) { best = acc.email; bestCount = n; }
+    }
+    calendarAccountCache = { at: Date.now(), email: best };
+    return best;
+  }
+
   // 相棒(v3): 片付け・送信予定・返事待ち・通知・スケジューラ
   const partner = createPartner({
     userDataDir: app.getPath('userData'),
@@ -2332,6 +2348,7 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
       if (mainWindow && !mainWindow.isDestroyed()) { mainWindow.show(); mainWindow.focus(); } else createWindow();
     },
     getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+    defaultCalendarAccount: () => pickCalendarAccount(),
     log: (m) => console.log(m),
   });
   partnerRef = partner;

@@ -64,3 +64,38 @@ export function buildIcs(ev: CaseEvent & { description?: string }, now = new Dat
   lines.push('END:VEVENT', 'END:VCALENDAR', '');
   return lines.join('\r\n');
 }
+
+
+/**
+ * Google カレンダーの「予定を作成」画面を、件名・日時・場所・メモを埋めた状態で開く URL。
+ * OAuth 不要。先生が開いた画面で「保存」を押すと Google カレンダーに入る(eM Client にも同期される)。
+ *  - 時刻あり: dates=YYYYMMDDTHHMMSS/YYYYMMDDTHHMMSS + ctz=Asia/Tokyo(ローカル時刻として解釈)
+ *  - 終日: dates=YYYYMMDD/YYYYMMDD(終了日は翌日、排他的)
+ *  - authuser=<メール> でどの Google アカウントに入れるかを選ぶ
+ */
+export function googleCalendarTemplateUrl(ev: CaseEvent & { description?: string }, authuser?: string): string {
+  const start = toIcsDateTime(ev.start);
+  if (!start) throw new Error(`予定の日時が読めません: ${ev.start}`);
+  const allDay = ev.allDay || start.allDay;
+  let dates: string;
+  if (allDay) {
+    const s = start.value.slice(0, 8);
+    const e = ev.end ? (toIcsDateTime(ev.end)?.value.slice(0, 8) ?? s) : s;
+    dates = `${s}/${addDays(e >= s ? e : s, 1)}`;
+  } else {
+    const e = ev.end ? toIcsDateTime(ev.end) : null;
+    let endValue = e && !e.allDay ? e.value : '';
+    if (!endValue) {
+      const [, y, mo, d, h, mi] = start.value.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})/)!;
+      const dt = new Date(Number(y), Number(mo) - 1, Number(d), Number(h) + 1, Number(mi));
+      endValue = `${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}T${pad(dt.getHours())}${pad(dt.getMinutes())}00`;
+    }
+    dates = `${start.value}/${endValue}`;
+  }
+  const q = new URLSearchParams({ action: 'TEMPLATE', text: ev.title, dates });
+  if (!allDay) q.set('ctz', 'Asia/Tokyo');
+  if (ev.location) q.set('location', ev.location);
+  if (ev.description) q.set('details', ev.description.slice(0, 1500));
+  if (authuser) q.set('authuser', authuser);
+  return `https://calendar.google.com/calendar/render?${q.toString()}`;
+}

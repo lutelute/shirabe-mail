@@ -27,7 +27,7 @@ import { getThreadContext, getSentExemplars, getReplyHeaders, getWaitingThreads,
 import { discoverAccountEndpoints } from './services/account-discovery';
 import { tidyToArchive, restoreToInbox, markAnswered, appendToSent, appendToDrafts, testImap, isGmailHost } from './services/mailbox-actions';
 import { sendMail, verifySmtp, composeBody, replySubject, friendlySmtpError, buildRawMessage } from './services/mail-sender';
-import { buildIcs } from './services/calendar-ics';
+import { buildIcs, googleCalendarTemplateUrl } from './services/calendar-ics';
 import { loadIndex, saveIndex, upsertTask, markTask, ensureTaskCli, indexPath } from './services/task-cli';
 import type { QuotedOriginal } from './services/mail-sender';
 import { normalizeOutbox, enqueue, cancel, expedite, update as updateOutbox, dueItems, prune, visibleItems } from './services/outbox';
@@ -52,6 +52,7 @@ export interface PartnerHost {
   send: (channel: string, payload: unknown) => void;
   showWindow: () => void;
   getWindow: () => Electron.BrowserWindow | null;
+  defaultCalendarAccount: () => string;   // 予定が実際に入っている Google アカウント(自動選択)
   log: (m: string) => void;
 }
 
@@ -931,20 +932,32 @@ export function createPartner(host: PartnerHost): Partner {
       return { status: 'done', text, opened };
     });
 
-    ipcMain.handle('partner:addToCalendar', async (_e, params: { caseId: string }) => {
+    ipcMain.handle('partner:addToCalendar', async (_e, params: { caseId: string; target?: 'google' | 'emclient' | 'chatgpt' }) => {
       const digest = loadDigest();
       const c = digest?.cases?.find((x) => x.id === params?.caseId);
       if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
       if (!c.event) return { status: 'error', error: 'この案件には予定が見つかっていません' };
+      const settings = host.loadSettings();
+      const target = params.target ?? settings.calendarTarget ?? 'google';
+      const description = `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}`;
       try {
+        if (target === 'google') {
+          const account = settings.calendarGoogleAccount || host.defaultCalendarAccount();
+          const url = googleCalendarTemplateUrl({ ...c.event, description }, account || undefined);
+          await shell.openExternal(url);
+          journal({ kind: 'decided', text: `Google カレンダーの登録画面を開いた: ${c.event.title}(${c.event.start})${account ? ` → ${account}` : ''}`, caseId: c.id, accountEmail: c.accountEmail });
+          return { status: 'done', target, url, account };
+        }
+        if (target === 'chatgpt') {
+          return { status: 'error', error: 'ChatGPT への登録は「ChatGPT で登録」ボタンから' };
+        }
         const dir = path.join(host.userDataDir, 'calendar');
         fs.mkdirSync(dir, { recursive: true });
         const p = path.join(dir, `${safeName(c.id)}.ics`);
-        const ics = buildIcs({ ...c.event, description: `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}` });
-        fs.writeFileSync(p, ics, 'utf-8');
+        fs.writeFileSync(p, buildIcs({ ...c.event, description }), 'utf-8');
         try { execFileSync('open', ['-a', 'eM Client', p], { timeout: 8000 }); } catch { await shell.openPath(p); }
-        journal({ kind: 'decided', text: `カレンダー登録を開始: ${c.event.title}(${c.event.start})`, caseId: c.id, accountEmail: c.accountEmail });
-        return { status: 'done', path: p };
+        journal({ kind: 'decided', text: `eM Client で予定登録を開始: ${c.event.title}(${c.event.start})`, caseId: c.id, accountEmail: c.accountEmail });
+        return { status: 'done', target: 'emclient', path: p };
       } catch (err) {
         return { status: 'error', error: (err as Error).message };
       }
