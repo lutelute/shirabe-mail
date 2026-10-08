@@ -35,6 +35,17 @@ extraResources:
     to: "mcp-server/node_modules"
     filter:
       - "!**/typescript/**"
+      # 実行時に要らない開発用(.bin のリンクは typescript を外すと宙に浮き、署名で落ちる)
+      - "!.bin{,/**}"
+      - "!**/.bin{,/**}"
+      - "!.vite{,/**}"
+      - "!{vite,vitest,rolldown,lightningcss,lightningcss-darwin-arm64,@vitest,@rolldown,@oxc-project}{,/**}"
+      # better-sqlite3 をソースから作り直したときの中間生成物(.o や .a は署名できない)
+      - "!**/better-sqlite3/build/Release/{obj,obj.target,.deps}{,/**}"
+      - "!**/better-sqlite3/build/{deps,src,Makefile,config.gypi,*.mk,*.Makefile,binding.Makefile}{,/**}"
+      - "!**/better-sqlite3/build/Release/test_extension.node"
+      - "!**/better-sqlite3/{deps,src}{,/**}"
+      - "!**/*.{o,a}"
       - "!**/@types/**"
       - "!**/test{,s}/**"
       - "!**/*.map"
@@ -53,6 +64,8 @@ mac:
   icon: build/icon.icns
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
+  # 署名はローカル用の自己署名(公証しない)なので時刻証明は不要。研究室 LAN は外向き HTTP 不可で timestamp.apple.com に届かない
+  timestamp: none
 dmg:
   title: "${productName}"
   contents:

@@ -128,6 +128,34 @@ export function createPartner(host: PartnerHost): Partner {
     log: host.log,
   });
 
+  // カレンダーの書き込み権限(Claude 連携)。userData/gcal-access.json に 1 日キャッシュ
+  const ACCESS_PATH = path.join(host.userDataDir, 'gcal-access.json');
+  function loadAccess(): { at: number; roles: Record<string, string> } {
+    try { const j = JSON.parse(fs.readFileSync(ACCESS_PATH, 'utf-8')); return { at: Number(j.at) || 0, roles: j.roles ?? {} }; } catch { return { at: 0, roles: {} }; }
+  }
+  async function ensureAccess(ids: string[], force = false): Promise<Record<string, string>> {
+    const cur = loadAccess();
+    const missing = ids.filter((id) => !cur.roles[id]);
+    if (!force && missing.length === 0 && Date.now() - cur.at < 86_400_000) return cur.roles;
+    try {
+      const roles = { ...cur.roles, ...(await claudeGcal.checkAccess(force ? ids : (missing.length ? missing : ids))) };
+      fs.writeFileSync(ACCESS_PATH, JSON.stringify({ at: Date.now(), roles }, null, 2), 'utf-8');
+      return roles;
+    } catch (err) {
+      host.log(`[claude-gcal] access check failed: ${(err as Error).message}`);
+      return cur.roles;
+    }
+  }
+  const writable = (role?: string) => role === 'owner' || role === 'writer';
+  /** 書き込めないカレンダーなら、書き込める候補(個人)へ寄せる */
+  async function writableTarget(target: string): Promise<{ target: string; fellBack: boolean }> {
+    const list = calendarTargetList();
+    const roles = await ensureAccess(Array.from(new Set([target, ...list])));
+    if (!roles[target] || writable(roles[target])) return { target, fellBack: false };
+    const alt = list.find((t) => t !== target && writable(roles[t])) ?? Object.keys(roles).find((t) => writable(roles[t]) && t.endsWith('@gmail.com'));
+    return alt ? { target: alt, fellBack: true } : { target, fellBack: false };
+  }
+
   function calendarVia(): 'claude' | 'oauth' {
     const s = host.loadSettings();
     if (s.calendarVia === 'oauth' && google.status().connected) return 'oauth';
@@ -154,9 +182,16 @@ export function createPartner(host: PartnerHost): Partner {
     if (!target) throw new Error('予定を入れる Google カレンダーが決まっていません');
     const via = calendarVia();
     const description = `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)`;
-    const r = via === 'oauth'
-      ? await google.insertEvent(target, { ...ev, description })
-      : { ...(await claudeGcal.createEvent(target, { ...ev, description })), email: target };
+    let fellBackFrom = '';
+    let r: { id: string; htmlLink: string; calendarId: string; email: string };
+    if (via === 'oauth') {
+      r = await google.insertEvent(target, { ...ev, description });
+    } else {
+      const w = await writableTarget(target);
+      if (w.fellBack) fellBackFrom = target;
+      r = { ...(await claudeGcal.createEvent(w.target, { ...ev, description })), email: w.target };
+    }
+    if (fellBackFrom) journal({ kind: 'error', text: `${fellBackFrom} は閲覧のみのため ${r.email} に登録しました(書き込むには大学のカレンダーを lutebass@gmail.com に「予定の変更」で共有)`, caseId: c.id, accountEmail: c.accountEmail });
     withCase(c.id, (cc) => {
       cc.calendarStatus = 'registered';
       cc.calendarMatch = ev.title;
@@ -1034,6 +1069,57 @@ export function createPartner(host: PartnerHost): Partner {
       }
     });
 
+    ipcMain.handle('partner:addManyToCalendar', async (_e, params: { items: Array<{ caseId: string; account?: string }> }) => {
+      const digest = loadDigest();
+      if (!digest?.cases) return { status: 'error', done: 0, failed: [], error: 'ダイジェストが見つかりません' };
+      const via = calendarVia();
+      const failed: Array<{ caseId: string; error: string }> = [];
+      const ready: Array<{ c: ButlerCase; target: string }> = [];
+      for (const it of params?.items ?? []) {
+        const c = digest.cases.find((x) => x.id === it.caseId);
+        if (!c?.event) { failed.push({ caseId: it.caseId, error: '予定が見つかりません' }); continue; }
+        const target = googleAccountFor(c, it.account);
+        if (!target) { failed.push({ caseId: it.caseId, error: '登録先が決まっていません' }); continue; }
+        ready.push({ c, target });
+      }
+      let done = 0;
+      const record = (c: ButlerCase, r: { id: string; htmlLink: string; calendarId: string }, email: string) => {
+        withCase(c.id, (cc) => {
+          cc.calendarStatus = 'registered'; cc.calendarMatch = c.event?.title; cc.calendarEventId = r.id;
+          cc.calendarEventCalendarId = r.calendarId; cc.calendarEventAccount = email; cc.calendarEventLink = r.htmlLink; cc.calendarEventVia = via;
+        });
+        done += 1;
+      };
+      const desc = (c: ButlerCase) => `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)`;
+      try {
+        if (via === 'oauth') {
+          for (const { c, target } of ready) {
+            try { record(c, await google.insertEvent(target, { ...c.event!, description: desc(c) }), target); } catch (err) { failed.push({ caseId: c.id, error: (err as Error).message }); }
+          }
+        } else {
+          // 閲覧のみのカレンダーは書き込める方へ寄せる
+          for (const it of ready) { const w = await writableTarget(it.target); it.target = w.target; }
+          for (let i = 0; i < ready.length; i += 8) {
+            const chunk = ready.slice(i, i + 8);
+            try {
+              const res = await claudeGcal.createEvents(chunk.map(({ c, target }) => ({ key: c.id, calendarId: target, ev: { ...c.event!, description: desc(c) } })));
+              for (const { c, target } of chunk) {
+                const r = res.get(c.id);
+                if (r) record(c, r, target); else failed.push({ caseId: c.id, error: '登録の結果が返りませんでした' });
+              }
+            } catch (err) {
+              for (const { c } of chunk) failed.push({ caseId: c.id, error: (err as Error).message });
+            }
+            pushState();
+          }
+        }
+      } finally {
+        journal({ kind: 'decided', text: `Google カレンダーにまとめて登録: ${done} 件${failed.length ? `(失敗 ${failed.length} 件)` : ''}` });
+        pushState();
+      }
+      return { status: done > 0 || failed.length === 0 ? 'done' : 'error', done, failed, error: done === 0 && failed[0] ? failed[0].error : undefined };
+    });
+
     ipcMain.handle('partner:removeFromCalendar', async (_e, params: { caseId: string }) => {
       const digest = loadDigest();
       const c = digest?.cases?.find((x) => x.id === params?.caseId);
@@ -1059,7 +1145,12 @@ export function createPartner(host: PartnerHost): Partner {
     ipcMain.handle('google:status', () => google.status());
     ipcMain.handle('calendar:targets', () => ({ via: calendarVia(), targets: calendarTargetList() }));
     ipcMain.handle('calendar:listViaClaude', async () => {
-      try { return { status: 'done', calendars: await claudeGcal.listCalendars() }; } catch (err) { return { status: 'error', error: (err as Error).message }; }
+      try {
+        const calendars = await claudeGcal.listCalendars();
+        const ids = calendars.map((c) => c.id).filter((id) => !id.includes('#holiday'));
+        const roles = await ensureAccess(ids, true);
+        return { status: 'done', calendars: calendars.map((c) => ({ ...c, accessRole: roles[c.id] })) };
+      } catch (err) { return { status: 'error', error: (err as Error).message }; }
     });
     ipcMain.handle('google:connect', async (_e, params: { clientId?: string; clientSecret?: string; loginHint?: string }) => {
       try {

@@ -218,6 +218,7 @@ const api = {
   partnerAddToCalendar: (params) => ipcRenderer.invoke('partner:addToCalendar', params),
   partnerHandoffCopy: (params) => ipcRenderer.invoke('partner:handoffCopy', params),
   partnerRemoveFromCalendar: (params) => ipcRenderer.invoke('partner:removeFromCalendar', params),
+  partnerAddManyToCalendar: (params) => ipcRenderer.invoke('partner:addManyToCalendar', params),
   googleStatus: () => ipcRenderer.invoke('google:status'),
   calendarTargets: () => ipcRenderer.invoke('calendar:targets'),
   calendarListViaClaude: () => ipcRenderer.invoke('calendar:listViaClaude'),

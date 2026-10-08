@@ -17,7 +17,7 @@ interface Props {
 }
 
 export default function ClaudeCalendarTargets({ via, onVia, targets, onTargets, autoAdd, onAutoAdd, inputCls }: Props) {
-  const [cals, setCals] = useState<Array<{ id: string; summary: string }>>([]);
+  const [cals, setCals] = useState<Array<{ id: string; summary: string; accessRole?: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<{ text: string; err?: boolean } | null>(null);
   const work = targets[0] ?? 'lute@u-fukui.ac.jp';
@@ -30,7 +30,7 @@ export default function ClaudeCalendarTargets({ via, onVia, targets, onTargets, 
       const r = await window.electronAPI.calendarListViaClaude();
       if (r.status === 'done' && r.calendars) {
         setCals(r.calendars.filter((c) => !c.id.includes('#holiday')));
-        setMsg({ text: `${r.calendars.length} 個のカレンダーが見つかりました。Claude の連携は使えます。` });
+        setMsg({ text: `${r.calendars.length} 個のカレンダーが見つかりました。Claude の連携は使えます。「閲覧のみ」のカレンダーには書き込めません。` });
       } else {
         setMsg({ text: r.error ?? '読めませんでした', err: true });
       }
@@ -41,7 +41,12 @@ export default function ClaudeCalendarTargets({ via, onVia, targets, onTargets, 
 
   const options = (current: string) => {
     const ids = Array.from(new Set([current, ...cals.map((c) => c.id)])).filter(Boolean);
-    return ids.map((id) => <option key={id} value={id}>{cals.find((c) => c.id === id)?.summary && cals.find((c) => c.id === id)!.summary !== id ? `${cals.find((c) => c.id === id)!.summary}(${id})` : id}</option>);
+    return ids.map((id) => {
+      const c = cals.find((x) => x.id === id);
+      const name = c?.summary && c.summary !== id ? `${c.summary}(${id})` : id;
+      const role = c?.accessRole ? (c.accessRole === 'owner' || c.accessRole === 'writer' ? ' — 書き込み可' : ' — 閲覧のみ') : '';
+      return <option key={id} value={id}>{name}{role}</option>;
+    });
   };
 
   const seg = (active: boolean) => `px-3 py-1.5 text-sm rounded transition-colors ${active ? 'bg-accent-500/20 text-accent-400 border border-accent-500/30' : 'bg-surface-700 text-surface-300 hover:bg-surface-600 border border-transparent'}`;
@@ -66,6 +71,18 @@ export default function ClaudeCalendarTargets({ via, onVia, targets, onTargets, 
             <button type="button" onClick={() => void load()} disabled={loading} className="px-3 py-1.5 text-xs rounded bg-surface-700 text-surface-200 hover:bg-surface-600 disabled:opacity-40">{loading ? '読んでいます…' : 'カレンダー一覧を読み込む(接続の確認)'}</button>
           </div>
           <p className="text-xs text-surface-500">大学のアドレス(lute@u-fukui.ac.jp / lute@g.u-fukui.ac.jp)宛のメールの予定は「大学の予定」へ、Gmail 宛は「個人の予定」へ入ります。予定ごとに「今日」から選び直せます。</p>
+          {(() => {
+            const w = cals.find((c) => c.id === work);
+            if (!w?.accessRole || w.accessRole === 'owner' || w.accessRole === 'writer') return null;
+            return (
+              <div className="rounded-md border border-amber-600/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 leading-relaxed">
+                「大学の予定」の {work} は <b>閲覧のみ</b> で、今は書き込めません(その間は「個人の予定」に入れて日誌に残します)。
+                書き込むには、大学の Google カレンダーを開き、{work} の「設定と共有」→「特定のユーザーまたはグループと共有する」で <b>lutebass@gmail.com</b> を
+                「<b>予定の変更</b>」権限で追加してください。追加後に「カレンダー一覧を読み込む」を押すと反映されます。
+                すぐに分けたい場合は、書き込める lute.ufukui@gmail.com を「大学の予定」に選ぶこともできます。
+              </div>
+            );
+          })()}
           <label className="flex items-center gap-2 text-sm text-surface-200 cursor-pointer">
             <input type="checkbox" checked={autoAdd} onChange={(e) => onAutoAdd(e.target.checked)} />
             見つけた予定(会議・行事・締切)を相棒が自動で登録する

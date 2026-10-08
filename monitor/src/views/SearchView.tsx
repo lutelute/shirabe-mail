@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { isSubmitEnter } from '../utils/ime';
 import { useAppContext } from '../context/AppContext';
 import { useSearchData } from '../hooks/useSearchData';
 import { useFolderData } from '../hooks/useFolderData';
@@ -34,7 +35,7 @@ export default function SearchView() {
   }, [keyword, searchAccount, selectedAccounts, settings.mailDaysBack, search]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') handleSearch();
+    if (isSubmitEnter(e)) handleSearch();
   }, [handleSearch]);
 
   const handleSelectFolder = useCallback((folder: FolderItem) => {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { isSubmitEnter } from '../../utils/ime';
 import type { ButlerCase, ButlerCaseStatus, HandoffTarget } from '../../types';
 import { openInEmClient } from '../../utils/openInEmClient';
 import type { CaseVariant } from './queue';
@@ -183,7 +184,7 @@ export default function CaseDetail(p: CaseDetailProps) {
                 <input
                   value={other}
                   onChange={(e) => setOther(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && other.trim()) { p.onAnswer(c, other.trim()); setOther(''); } }}
+                  onKeyDown={(e) => { if (isSubmitEnter(e) && other.trim()) { e.preventDefault(); p.onAnswer(c, other.trim()); setOther(''); } }}
                   placeholder="その他(自由に書く)"
                   className="app-no-drag flex-1 h-8 px-3 text-[13px] bg-card border border-hairline rounded-md focus:border-primary/60 text-ink"
                 />
@@ -354,7 +355,7 @@ function HandoffSection({ c, busy, onPrepare, onOpen, onPick, onCopy }: {
         <input
           value={extra}
           onChange={(e) => setExtra(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !busy) { onPrepare(c, extra.trim() || undefined); setExtra(''); } }}
+          onKeyDown={(e) => { if (isSubmitEnter(e) && !busy) { e.preventDefault(); onPrepare(c, extra.trim() || undefined); setExtra(''); } }}
           placeholder="追加の指示(任意)"
           className="app-no-drag h-8 w-48 px-2.5 text-[12px] bg-card border border-hairline rounded-md focus:border-primary/60 text-ink"
         />

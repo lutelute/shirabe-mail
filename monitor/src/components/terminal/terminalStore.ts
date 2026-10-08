@@ -4,9 +4,18 @@
 //   - PTY のデータ購読は 1 本だけ(onPtyData / onPtyExit)。id でセッションに振り分ける
 // =====================================================================
 import { Terminal } from '@xterm/xterm';
+import { isComposingKey } from '../../utils/ime';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import type { PtySession } from '../../types';
+
+/** 日本語変換の確定 Enter をシェルへ送らない(xterm に渡す前に捨てる) */
+function imeGuard(term: Terminal): void {
+  term.attachCustomKeyEventHandler((ev) => {
+    if (ev.type === 'keydown' && ev.key === 'Enter' && isComposingKey(ev)) return false;
+    return true;
+  });
+}
 
 export interface TermEntry {
   info: PtySession;
@@ -118,6 +127,7 @@ export async function create(params: { title?: string; cwd?: string; command?: s
   holder.removeChild(element);
   holder.remove();
   const entry: TermEntry = { info, term, fit, element };
+  imeGuard(term);
   term.onData((data) => { void window.electronAPI.ptyWrite(info.id, data); });
   term.onResize(({ cols, rows }) => { void window.electronAPI.ptyResize(info.id, cols, rows); });
   entries.set(info.id, entry);
@@ -171,6 +181,7 @@ export async function adoptExisting(): Promise<void> {
     term.open(element);
     holder.removeChild(element);
     holder.remove();
+    imeGuard(term);
     term.onData((data) => { void window.electronAPI.ptyWrite(s.id, data); });
     term.onResize(({ cols, rows }) => { void window.electronAPI.ptyResize(s.id, cols, rows); });
     if (!s.alive) term.write(`\x1b[2m(終了 code ${s.exitCode ?? '?'})\x1b[0m\r\n`);

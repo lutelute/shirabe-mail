@@ -1062,6 +1062,7 @@ export interface ElectronAPI {
   // カレンダー
   partnerAddToCalendar: (params: { caseId: string; target?: CalendarTarget; account?: string }) => Promise<{ status: string; target?: CalendarTarget; path?: string; url?: string; account?: string; inserted?: boolean; link?: string; error?: string }>;
   partnerRemoveFromCalendar: (params: { caseId: string }) => Promise<{ status: string; error?: string }>;
+  partnerAddManyToCalendar: (params: { items: Array<{ caseId: string; account?: string }> }) => Promise<{ status: string; done: number; failed: Array<{ caseId: string; error: string }>; error?: string }>;
   // Google カレンダーの認可(OAuth)
   googleStatus: () => Promise<GoogleStatus>;
   googleConnect: (params: { clientId?: string; clientSecret?: string; loginHint?: string }) => Promise<{ status: string; google?: GoogleStatus; error?: string }>;
@@ -1070,7 +1071,7 @@ export interface ElectronAPI {
   googleSetCalendar: (email: string, calendarId: string) => Promise<GoogleStatus>;
   // 予定の登録先(Claude 連携なら calendarTargets、OAuth なら認可済みアカウント)
   calendarTargets: () => Promise<{ via: 'claude' | 'oauth'; targets: string[] }>;
-  calendarListViaClaude: () => Promise<{ status: string; calendars?: Array<{ id: string; summary: string }>; error?: string }>;
+  calendarListViaClaude: () => Promise<{ status: string; calendars?: Array<{ id: string; summary: string; accessRole?: string }>; error?: string }>;
   partnerSaveProfile: (content: string) => Promise<void>;
   onPartnerState: (callback: (state: PartnerState) => void) => () => void;
 }

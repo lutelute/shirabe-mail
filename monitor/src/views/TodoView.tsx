@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { isSubmitEnter } from '../utils/ime';
 import { useAppContext } from '../context/AppContext';
 import { useMailData } from '../hooks/useMailData';
 import { useClaudeAgent } from '../hooks/useClaudeAgent';
@@ -282,7 +283,7 @@ export default function TodoView() {
                 onChange={(e) => setNewAction(e.target.value)}
                 placeholder="やること..."
                 className="w-full px-2 py-1 text-sm bg-surface-900 border border-surface-600 rounded text-white placeholder-surface-500 focus:outline-none focus:border-blue-500 mb-1.5"
-                onKeyDown={(e) => e.key === 'Enter' && handleAddManual()}
+                onKeyDown={(e) => { if (isSubmitEnter(e)) handleAddManual(); }}
               />
               <div className="flex items-center gap-2">
                 <select

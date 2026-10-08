@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import CalendarBatchDialog from '../components/partner/CalendarBatchDialog';
+import { isComposingKey } from '../utils/ime';
 import type { PartnerState, ButlerCase, ButlerCaseStatus, ButlerGroup, OutboxItem, FollowUp, ViewType, HandoffTarget } from '../types';
 import { useAppContext } from '../context/AppContext';
 import BriefCard from '../components/partner/BriefCard';
@@ -323,6 +325,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
   const nothingToDo = loaded && !!state?.digest && groups.pending === 0 && groups.outboxActive.length === 0 && groups.followActive.length === 0;
 
   // ---- 上部の要約チップ(クリックで該当セクションへ) ----
+  const [showCalendarBatch, setShowCalendarBatch] = useState(false);
   const missingCases = useMemo(() => groups.cases.filter((c) => c.status === 'open' && !!c.event && c.calendarStatus === 'missing'), [groups]);
   type SummaryKey = Section | 'missing';
   type SummaryTone = SectionTone | 'danger-outline';
@@ -344,6 +347,10 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
     let section: Section;
     let targetId: string | null = null;
     if (key === 'missing') {
+      setShowCalendarBatch(true);
+      return;
+    }
+    if (key === ('missing-jump' as SummaryKey)) {
       const c = missingCases[0];
       if (!c) return;
       section = sectionOf(c);
@@ -414,12 +421,13 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
       const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isComposingKey(e)) return;   // 日本語変換中・確定直後のキーは拾わない
       if (flat.length === 0) return;
       const idx = flat.findIndex((i) => i.id === selectedId);
       if (e.key === 'j' || e.key === 'ArrowDown') { e.preventDefault(); setSelectedId(flat[Math.min(flat.length - 1, idx + 1)].id); return; }
       if (e.key === 'k' || e.key === 'ArrowUp') { e.preventDefault(); setSelectedId(flat[Math.max(0, idx <= 0 ? 0 : idx - 1)].id); return; }
       if (!selected) return;
-      if (e.key === 'Enter') { e.preventDefault(); primaryAction(selected); return; }
+      if (e.key === 'Enter') { if (isComposingKey(e)) return; e.preventDefault(); primaryAction(selected); return; }
       if (selected.kind === 'case') {
         const { c } = selected;
         if (busy.has(c.id)) return;
@@ -513,6 +521,9 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
 
   return (
     <div className="h-full flex flex-col bg-paper relative">
+      {showCalendarBatch && (
+        <CalendarBatchDialog cases={missingCases} targets={googleAccounts} onClose={() => setShowCalendarBatch(false)} onDone={flash} />
+      )}
       {toast && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 px-3.5 py-2 bg-ink text-paper rounded-md text-[12.5px] shadow-card">{toast}</div>
       )}

@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
+import { isSubmitEnter } from '../utils/ime';
 import { useAppContext } from '../context/AppContext';
 import { useProjectContext } from '../hooks/useProjectContext';
 import type { ScheduleEntry } from '../types';
@@ -213,7 +214,7 @@ export default function ProjectView() {
           <h2 className="text-base font-semibold mb-2">プロジェクト</h2>
           <div className="flex items-center gap-1.5">
             <input type="text" value={pathInput} onChange={(e) => setPathInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleSetBasePath(); }}
+              onKeyDown={(e) => { if (isSubmitEnter(e)) handleSetBasePath(); }}
               placeholder="ベースパスを入力..."
               className="flex-1 bg-surface-800 border border-surface-600 rounded px-2 py-1 text-sm text-white placeholder-surface-500 focus:outline-none focus:border-blue-500"
             />
