@@ -2349,6 +2349,8 @@ ${params.instruction ? `## ユーザーからの追加指示\n${params.instructi
     },
     getWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
     defaultCalendarAccount: () => pickCalendarAccount(),
+    encrypt: encryptSecret,
+    decrypt: decryptSecret,
     log: (m) => console.log(m),
   });
   partnerRef = partner;

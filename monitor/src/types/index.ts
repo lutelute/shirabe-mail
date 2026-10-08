@@ -489,6 +489,7 @@ export interface AppSettings {
   butlerEffort: ButlerEffort;            // 考える深さ(Claude CLI --effort)。既定 xhigh
   calendarTarget: CalendarTarget;        // 予定の登録先(既定 Google カレンダー)
   calendarGoogleAccount: string;         // Google カレンダーのアカウント(空 = 予定が入っているアカウントを自動)
+  calendarAutoAdd: boolean;              // 認可済みなら、見つけた予定を相棒が自動で登録する
   butlerInitialDays: number;             // 初回実行で遡る日数(2回目以降は前回実行以降)
   butlerMaxCasesPerRun: number;          // 1回でAI判定する案件数の上限
   butlerMaxDraftsPerRun: number;         // 1回で用意する返信下書きの上限
@@ -541,6 +542,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   butlerEffort: 'xhigh',
   calendarTarget: 'google',
   calendarGoogleAccount: '',
+  calendarAutoAdd: false,
   butlerInitialDays: 14,
   butlerMaxCasesPerRun: 50,
   butlerMaxDraftsPerRun: 5,
@@ -561,6 +563,14 @@ export type ButlerSchedule = 'manual' | 'startup' | 'hourly' | 'daily';
 export type ButlerModel = 'haiku' | 'sonnet' | 'opus';
 export type ButlerEffort = 'medium' | 'high' | 'xhigh' | 'max';   // Claude CLI の --effort
 export type CalendarTarget = 'google' | 'emclient' | 'chatgpt';   // 予定の登録先
+
+export interface GoogleStatus {
+  configured: boolean;   // Client ID がある
+  connected: boolean;    // 認可済み(リフレッシュトークンあり)
+  email: string;
+  calendarId: string;
+  clientId: string;
+}
 
 // パイプラインが1通に対して下した処理の種類
 // reversible(可逆)なものは自動実行済、await_* は不可逆ゆえ承認待ち
@@ -669,7 +679,10 @@ export interface ButlerCase {
   isRead?: boolean;                 // 先生が既に eM Client で開いた
   handoff?: CaseHandoff | null;     // 作業への受け渡し(指示書・フォルダ)
   event?: CaseEvent | null;         // メールに書かれた予定(会議・締切の日時)
-  calendarStatus?: 'registered' | 'missing' | 'unknown';  // eM Client のカレンダーにあるか
+  calendarStatus?: 'registered' | 'missing' | 'unknown';  // カレンダーにあるか
+  calendarEventId?: string;         // 相棒が Google カレンダーに直接入れた予定(取り消し用)
+  calendarEventCalendarId?: string;
+  calendarEventLink?: string;
   calendarMatch?: string;           // 一致した予定の件名
 }
 
@@ -1035,7 +1048,14 @@ export interface ElectronAPI {
   partnerHandoffCopy: (params: { caseId: string }) => Promise<{ status: string; text?: string; error?: string }>;
   partnerCalendarCopy: (params: { caseId: string; target: 'chatgpt' | 'clipboard' }) => Promise<{ status: string; text?: string; opened?: boolean; error?: string }>;
   // カレンダー
-  partnerAddToCalendar: (params: { caseId: string; target?: CalendarTarget }) => Promise<{ status: string; target?: CalendarTarget; path?: string; url?: string; account?: string; error?: string }>;
+  partnerAddToCalendar: (params: { caseId: string; target?: CalendarTarget }) => Promise<{ status: string; target?: CalendarTarget; path?: string; url?: string; account?: string; inserted?: boolean; link?: string; error?: string }>;
+  partnerRemoveFromCalendar: (params: { caseId: string }) => Promise<{ status: string; error?: string }>;
+  // Google カレンダーの認可(OAuth)
+  googleStatus: () => Promise<GoogleStatus>;
+  googleConnect: (params: { clientId: string; clientSecret: string; loginHint?: string }) => Promise<{ status: string; google?: GoogleStatus; error?: string }>;
+  googleDisconnect: () => Promise<GoogleStatus>;
+  googleCalendars: () => Promise<{ status: string; calendars?: Array<{ id: string; summary: string; primary: boolean; writable: boolean }>; error?: string }>;
+  googleSetCalendar: (calendarId: string) => Promise<GoogleStatus>;
   partnerSaveProfile: (content: string) => Promise<void>;
   onPartnerState: (callback: (state: PartnerState) => void) => () => void;
 }

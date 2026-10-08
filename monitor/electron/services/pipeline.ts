@@ -86,6 +86,7 @@ export interface PipelineDeps {
   journal?: (entry: Omit<JournalEntry, 'at'>) => void;
   getCalendarEvents?: (accountEmail: string, daysForward: number) => CalendarEvent[];
   extractEvents?: (ctx: JudgmentContext, inputs: EventOnlyInput[], model: string) => Promise<{ events: Map<string, CaseEvent | null>; aiCalls: number; costUsd: number; errors: string[] }>;
+  autoAddEvent?: (c: ButlerCase) => Promise<boolean>;   // 認可済み + 設定 ON のとき、未登録の予定を Google カレンダーへ
 }
 
 // ---------- カレンダー照合(純関数) ----------
@@ -958,6 +959,14 @@ export async function runButlerPipeline(deps: PipelineDeps, opts?: { force?: boo
         c.calendarStatus = r.status;
         c.calendarMatch = r.match;
       }
+    }
+  }
+  // 自動登録(設定 ON・Google 認可済みのときだけ。dryRun では行わない)
+  if (deps.autoAddEvent && !deps.dryRun) {
+    for (const c of merged.filter((x) => x.status === 'open' && x.calendarStatus === 'missing' && x.event && (x.event.kind === 'meeting' || x.event.kind === 'event' || x.event.kind === 'deadline')).slice(0, 10)) {
+      try {
+        if (await deps.autoAddEvent(c)) { c.calendarStatus = 'registered'; c.calendarMatch = c.event?.title; }
+      } catch { /* 次回 */ }
     }
   }
   stats.calendarMissing = merged.filter((c) => c.status === 'open' && c.calendarStatus === 'missing').length;

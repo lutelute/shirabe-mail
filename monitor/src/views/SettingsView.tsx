@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAppContext } from '../context/AppContext';
+import GoogleCalendarConnect from '../components/settings/GoogleCalendarConnect';
 import type {
   AppSettings, AccountImapConfig, ImapCredentials, SenderColorMode, ButlerModel, ButlerEffort, CalendarTarget,
   PartnerMode, AccountSmtpConfig, SmtpCredentials, AccountEndpoints,
@@ -450,8 +451,11 @@ export default function SettingsView() {
                     </select>
                   </div>
                 )}
-                <p className="text-xs text-surface-500 mt-1">「カレンダーに登録」で、件名・日時・場所を埋めた Google カレンダーの作成画面を開きます(保存を押すだけ)。eM Client は ICS で登録ダイアログを開きます。どちらも「ChatGPT」ボタンで文面コピーも可。</p>
+                <p className="text-xs text-surface-500 mt-1">「カレンダーに登録」で、件名・日時・場所を埋めた Google カレンダーの作成画面を開きます(保存を押すだけ)。下で Google と接続すると、画面を開かずに直接入ります。eM Client は ICS で登録ダイアログを開きます。</p>
               </div>
+              {(draft.calendarTarget ?? 'google') === 'google' && (
+                <GoogleCalendarConnect autoAdd={!!draft.calendarAutoAdd} onAutoAdd={(v) => update('calendarAutoAdd', v)} inputCls={inputCls} />
+              )}
               <div>
                 <label className="block text-sm text-surface-200 mb-2">自動で確認する間隔</label>
                 <ChoiceRow value={draft.partnerIntervalMinutes ?? 30} options={INTERVAL_OPTIONS} onChange={(v) => update('partnerIntervalMinutes', v)} />

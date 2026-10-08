@@ -28,6 +28,7 @@ import { discoverAccountEndpoints } from './services/account-discovery';
 import { tidyToArchive, restoreToInbox, markAnswered, appendToSent, appendToDrafts, testImap, isGmailHost } from './services/mailbox-actions';
 import { sendMail, verifySmtp, composeBody, replySubject, friendlySmtpError, buildRawMessage } from './services/mail-sender';
 import { buildIcs, googleCalendarTemplateUrl } from './services/calendar-ics';
+import { createGoogleCalendar } from './services/google-calendar';
 import { loadIndex, saveIndex, upsertTask, markTask, ensureTaskCli, indexPath } from './services/task-cli';
 import type { QuotedOriginal } from './services/mail-sender';
 import { normalizeOutbox, enqueue, cancel, expedite, update as updateOutbox, dueItems, prune, visibleItems } from './services/outbox';
@@ -53,11 +54,13 @@ export interface PartnerHost {
   showWindow: () => void;
   getWindow: () => Electron.BrowserWindow | null;
   defaultCalendarAccount: () => string;   // 予定が実際に入っている Google アカウント(自動選択)
+  encrypt: (s: string) => string;         // safeStorage
+  decrypt: (s: string) => string;
   log: (m: string) => void;
 }
 
 export interface Partner {
-  pipelineDeps: () => Pick<PipelineDeps, 'canTidy' | 'tidy' | 'canSend' | 'enqueueSend' | 'getWaitingThreads' | 'judgeFollowUps' | 'followUpsPath' | 'journal'>;
+  pipelineDeps: () => Pick<PipelineDeps, 'canTidy' | 'tidy' | 'canSend' | 'enqueueSend' | 'getWaitingThreads' | 'judgeFollowUps' | 'followUpsPath' | 'journal' | 'autoAddEvent'>;
   attach: (run: (opts?: { force?: boolean }) => Promise<NightlyDigest>) => void;
   setRunning: (running: boolean) => void;
   setProgress: (p: PartnerState['progress']) => void;
@@ -103,6 +106,30 @@ export function createPartner(host: PartnerHost): Partner {
   let handoffWatcher: FSWatcher | null = null;
   let watchDebounce: ReturnType<typeof setTimeout> | null = null;
   const RUN_REQUEST_PATH = path.join(host.userDataDir, 'run-request.json');
+
+  // ---------- Google カレンダー(OAuth) ----------
+  const google = createGoogleCalendar({
+    storePath: path.join(host.userDataDir, 'google-auth.json'),
+    encrypt: host.encrypt,
+    decrypt: host.decrypt,
+    openExternal: (url) => shell.openExternal(url),
+    log: host.log,
+  });
+
+  /** 案件の予定を Google カレンダーに直接入れ、案件に記録する */
+  async function insertCaseEvent(c: ButlerCase, auto: boolean): Promise<{ id: string; htmlLink: string; calendarId: string }> {
+    const ev = c.event!;
+    const r = await google.insertEvent({ ...ev, description: `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}\n(調が登録)` });
+    withCase(c.id, (cc) => {
+      cc.calendarStatus = 'registered';
+      cc.calendarMatch = ev.title;
+      cc.calendarEventId = r.id;
+      cc.calendarEventCalendarId = r.calendarId;
+      cc.calendarEventLink = r.htmlLink;
+    });
+    journal({ kind: 'decided', text: `Google カレンダーに登録${auto ? '(自動)' : ''}: ${ev.title}(${ev.start})`, caseId: c.id, accountEmail: c.accountEmail });
+    return r;
+  }
 
   // ---------- 小道具 ----------
   const safeName = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 80);
@@ -941,6 +968,11 @@ export function createPartner(host: PartnerHost): Partner {
       const target = params.target ?? settings.calendarTarget ?? 'google';
       const description = `${c.summary}\n\n差出人: ${c.from}\n件名: ${c.subject}`;
       try {
+        if (target === 'google' && google.status().connected) {
+          const r = await insertCaseEvent(c, false);
+          pushState();
+          return { status: 'done', target, inserted: true, link: r.htmlLink, account: google.status().email };
+        }
         if (target === 'google') {
           const account = settings.calendarGoogleAccount || host.defaultCalendarAccount();
           const url = googleCalendarTemplateUrl({ ...c.event, description }, account || undefined);
@@ -962,6 +994,40 @@ export function createPartner(host: PartnerHost): Partner {
         return { status: 'error', error: (err as Error).message };
       }
     });
+
+    ipcMain.handle('partner:removeFromCalendar', async (_e, params: { caseId: string }) => {
+      const digest = loadDigest();
+      const c = digest?.cases?.find((x) => x.id === params?.caseId);
+      if (!digest || !c) return { status: 'error', error: '案件が見つかりません' };
+      if (!c.calendarEventId || !c.calendarEventCalendarId) return { status: 'error', error: '相棒が登録した予定ではありません' };
+      try {
+        await google.deleteEvent(c.calendarEventCalendarId, c.calendarEventId);
+        withCase(c.id, (cc) => { cc.calendarStatus = 'missing'; cc.calendarMatch = undefined; cc.calendarEventId = undefined; cc.calendarEventCalendarId = undefined; cc.calendarEventLink = undefined; });
+        journal({ kind: 'cancelled', text: `Google カレンダーから取り消し: ${c.event?.title ?? c.subject}`, caseId: c.id, accountEmail: c.accountEmail });
+        pushState();
+        return { status: 'done' };
+      } catch (err) {
+        return { status: 'error', error: (err as Error).message };
+      }
+    });
+
+    ipcMain.handle('google:status', () => google.status());
+    ipcMain.handle('google:connect', async (_e, params: { clientId: string; clientSecret: string; loginHint?: string }) => {
+      try {
+        const st = await google.connect(params?.clientId ?? '', params?.clientSecret ?? '', params?.loginHint);
+        journal({ kind: 'decided', text: `Google カレンダーとつないだ: ${st.email}` });
+        host.showWindow();
+        return { status: 'done', google: st };
+      } catch (err) {
+        host.showWindow();
+        return { status: 'error', error: (err as Error).message };
+      }
+    });
+    ipcMain.handle('google:disconnect', () => { google.disconnect(); journal({ kind: 'decided', text: 'Google カレンダーとの接続を解除' }); return google.status(); });
+    ipcMain.handle('google:calendars', async () => {
+      try { return { status: 'done', calendars: await google.listCalendars() }; } catch (err) { return { status: 'error', error: (err as Error).message }; }
+    });
+    ipcMain.handle('google:setCalendar', (_e, calendarId: string) => { google.setCalendar(String(calendarId ?? '')); return google.status(); });
 
     ipcMain.handle('partner:discoverAccounts', (): AccountEndpoints[] => {
       const settings = host.loadSettings();
@@ -1018,6 +1084,10 @@ export function createPartner(host: PartnerHost): Partner {
       judgeFollowUps: (ctx, inputs, model) => judgeFollowUps(host.getRunner(), ctx, inputs, model),
       followUpsPath: FOLLOWUPS_PATH,
       journal,
+      autoAddEvent: async (c) => {
+        if (!host.loadSettings().calendarAutoAdd || !google.status().connected || !c.event) return false;
+        try { await insertCaseEvent(c, true); return true; } catch (err) { host.log(`[google] auto add failed: ${(err as Error).message}`); return false; }
+      },
     };
   }
 

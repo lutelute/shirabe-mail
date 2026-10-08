@@ -7,6 +7,7 @@ import type { JudgmentContext, CaseInput } from '../butler-brain';
 import { withSenderRule, tierFromRules, EMPTY_RULES } from '../butler-rules';
 import { bumpPriorityByDeadline, tagsFor, sortCases, mergeCarryOver, addressedToMe, runButlerPipeline, noteIdFor, reconcileFollowUps, canAutoSend, matchCalendar, titleSimilar } from '../pipeline';
 import { buildIcs, toIcsDateTime, googleCalendarTemplateUrl } from '../calendar-ics';
+import { eventBody } from '../google-calendar';
 import { enqueue, cancel, expedite, dueItems, prune, visibleItems, EMPTY_OUTBOX } from '../outbox';
 import { composeBody, replySubject, formatFrom } from '../mail-sender';
 import { extractSignature } from '../mail-intel';
@@ -603,4 +604,18 @@ test('googleCalendarTemplateUrl: timed / all-day / authuser', () => {
   assert.equal(d.searchParams.get('ctz'), null);
   const n = new URL(googleCalendarTemplateUrl({ title: 'x', start: '2026-10-08T23:30', allDay: false, kind: 'other' }));
   assert.equal(n.searchParams.get('dates'), '20261008T233000/20261009T003000');
+});
+
+
+test('google eventBody: timed / all-day / no end', () => {
+  const t1 = eventBody({ title: '役員会', start: '2026-10-29T17:00', end: '2026-10-29T19:00', allDay: false, kind: 'meeting', location: '金沢', description: 'd' });
+  assert.deepEqual(t1.start, { dateTime: '2026-10-29T17:00:00', timeZone: 'Asia/Tokyo' });
+  assert.deepEqual(t1.end, { dateTime: '2026-10-29T19:00:00', timeZone: 'Asia/Tokyo' });
+  assert.equal(t1.summary, '役員会');
+  assert.equal(t1.location, '金沢');
+  const a1 = eventBody({ title: '締切', start: '2026-10-08', allDay: true, kind: 'deadline' });
+  assert.deepEqual(a1.start, { date: '2026-10-08' });
+  assert.deepEqual(a1.end, { date: '2026-10-09' });
+  const n1 = eventBody({ title: 'x', start: '2026-10-08T23:30', allDay: false, kind: 'other' });
+  assert.deepEqual(n1.end, { dateTime: '2026-10-09T00:30:00', timeZone: 'Asia/Tokyo' });
 });

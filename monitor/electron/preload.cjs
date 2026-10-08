@@ -217,6 +217,12 @@ const api = {
   partnerDraftToEmClient: (params) => ipcRenderer.invoke('partner:draftToEmClient', params),
   partnerAddToCalendar: (params) => ipcRenderer.invoke('partner:addToCalendar', params),
   partnerHandoffCopy: (params) => ipcRenderer.invoke('partner:handoffCopy', params),
+  partnerRemoveFromCalendar: (params) => ipcRenderer.invoke('partner:removeFromCalendar', params),
+  googleStatus: () => ipcRenderer.invoke('google:status'),
+  googleConnect: (params) => ipcRenderer.invoke('google:connect', params),
+  googleDisconnect: () => ipcRenderer.invoke('google:disconnect'),
+  googleCalendars: () => ipcRenderer.invoke('google:calendars'),
+  googleSetCalendar: (calendarId) => ipcRenderer.invoke('google:setCalendar', calendarId),
   partnerCalendarCopy: (params) => ipcRenderer.invoke('partner:calendarCopy', params),
   onPartnerState: (callback) => {
     const handler = (_event, state) => callback(state);

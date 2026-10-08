@@ -34,6 +34,7 @@ export interface CaseDetailProps {
   onPickFolder: (c: ButlerCase) => void;
   onAddToCalendar: (c: ButlerCase) => void;
   onAddToCalendarVia?: (c: ButlerCase, target: 'google' | 'emclient') => void;
+  onRemoveFromCalendar?: (c: ButlerCase) => void;
 }
 
 const Label = ({ children, className = '' }: { children: React.ReactNode; className?: string }) => (
@@ -145,7 +146,7 @@ export default function CaseDetail(p: CaseDetailProps) {
                 {c.addressedToMe === 'cc' && <Chip label="Cc" cls="bg-card-2 text-ink-3 border-hairline" />}
                 {c.addressedToMe === 'list' && <Chip label="ML" cls="bg-card-2 text-ink-3 border-hairline" />}
               </div>
-              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onAddVia={p.onAddToCalendarVia} onCopy={p.onCalendarCopy} />}
+              {c.event && <EventRow c={c} busy={busy} onAdd={p.onAddToCalendar} onAddVia={p.onAddToCalendarVia} onCopy={p.onCalendarCopy} onRemove={p.onRemoveFromCalendar} />}
             </div>
           </header>
 
@@ -222,7 +223,7 @@ export default function CaseDetail(p: CaseDetailProps) {
 
 // ---------- 予定(カレンダー) ----------
 
-function EventRow({ c, busy, onAdd, onAddVia, onCopy }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onAddVia?: (c: ButlerCase, target: 'google' | 'emclient') => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void }) {
+function EventRow({ c, busy, onAdd, onAddVia, onCopy, onRemove }: { c: ButlerCase; busy: boolean; onAdd: (c: ButlerCase) => void; onAddVia?: (c: ButlerCase, target: 'google' | 'emclient') => void; onCopy: (c: ButlerCase, target: 'chatgpt' | 'clipboard') => void; onRemove?: (c: ButlerCase) => void }) {
   const ev = c.event!;
   const status = c.calendarStatus ?? 'unknown';
   return (
@@ -233,6 +234,12 @@ function EventRow({ c, busy, onAdd, onAddVia, onCopy }: { c: ButlerCase; busy: b
       </span>
       {status === 'missing' && <Chip label="カレンダー未登録" cls="bg-danger-soft text-danger border-danger/30" />}
       {status === 'registered' && <Chip label={`登録済み${c.calendarMatch ? `: ${c.calendarMatch}` : ''}`} cls="bg-ok-soft text-ok border-ok/30" />}
+      {status === 'registered' && c.calendarEventId && (
+        <>
+          {c.calendarEventLink && <GhostButton onClick={() => void window.electronAPI.openExternalUrl(c.calendarEventLink!)} title="Google カレンダーで開く">開く</GhostButton>}
+          {onRemove && <GhostButton onClick={() => onRemove(c)} disabled={busy} title="相棒が入れた予定を Google カレンダーから消す">取り消す</GhostButton>}
+        </>
+      )}
       {status === 'unknown' && <Chip label="カレンダー未確認" cls="bg-card-2 text-ink-3 border-hairline" />}
       {status === 'missing' && (
         <>

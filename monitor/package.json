@@ -1,6 +1,6 @@
 {
   "name": "shirabe",
-  "version": "3.1.7",
+  "version": "3.2.0",
   "description": "調 - メール処理を代わりにこなす相棒 (eM Client)",
   "type": "module",
   "main": "dist-electron/main.js",

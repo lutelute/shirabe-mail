@@ -97,7 +97,7 @@ export default function OutlookView({ onNavigate }: Props) {
     try {
       const r = await window.electronAPI.partnerAddToCalendar({ caseId });
       flash(r.status === 'done'
-        ? (r.target === 'emclient' ? 'eM Client で登録ダイアログを開きました。保存すると次回の確認で消えます' : `Google カレンダー${r.account ? `(${r.account})` : ''}の登録画面を開きました。「保存」を押してください`)
+        ? (r.inserted ? `Google カレンダー${r.account ? `(${r.account})` : ''}に登録しました` : r.target === 'emclient' ? 'eM Client で登録ダイアログを開きました。保存すると次回の確認で消えます' : `Google カレンダー${r.account ? `(${r.account})` : ''}の登録画面を開きました。「保存」を押してください`)
         : (r.error ?? '登録を開けませんでした'));
     } finally {
       setBusy(null);

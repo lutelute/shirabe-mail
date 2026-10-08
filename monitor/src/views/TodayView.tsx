@@ -221,10 +221,16 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
     if (res.status === 'error') flash(res.error ?? 'コピーに失敗しました');
     else flash(res.opened ? '予定の文面をコピーして ChatGPT を開きました。貼り付けて登録を頼んでください' : '予定の文面をコピーしました');
   }), [withBusy]);
-  const calendarToast = (res: { target?: string; account?: string }) =>
-    res.target === 'emclient'
-      ? 'eM Client で登録ダイアログを開きました。保存すると次回の確認で消えます'
-      : `Google カレンダー${res.account ? `(${res.account})` : ''}の登録画面を開きました。内容を確かめて「保存」を押してください`;
+  const calendarToast = (res: { target?: string; account?: string; inserted?: boolean }) =>
+    res.inserted
+      ? `Google カレンダー${res.account ? `(${res.account})` : ''}に登録しました。間違いなら「取り消す」で消せます`
+      : res.target === 'emclient'
+        ? 'eM Client で登録ダイアログを開きました。保存すると次回の確認で消えます'
+        : `Google カレンダー${res.account ? `(${res.account})` : ''}の登録画面を開きました。内容を確かめて「保存」を押してください`;
+  const onRemoveFromCalendar = useCallback((c: ButlerCase) => withBusy(c.id, async () => {
+    const res = await window.electronAPI.partnerRemoveFromCalendar({ caseId: c.id });
+    flash(res.status === 'error' ? (res.error ?? '取り消せませんでした') : 'Google カレンダーから取り消しました');
+  }), [withBusy, flash]);
   const onAddToCalendar = useCallback((c: ButlerCase) => withBusy(c.id, async () => {
     const res = await window.electronAPI.partnerAddToCalendar({ caseId: c.id });
     if (res.status === 'error') { flash(res.error ?? 'カレンダーに登録できませんでした'); return; }
@@ -435,7 +441,7 @@ export default function TodayView({ onNavigate }: TodayViewProps) {
           c={item.c} variant={item.variant} canSend={canSendFor(item.c.accountEmail)} busy={busy.has(item.c.id)} handoffBusy={busy.has(`handoff:${item.c.id}`)} sendDelayMinutes={sendDelay}
           editRequest={editRequest} handoffRequest={handoffRequest} emDraftRequest={emDraftRequest}
           onStatus={onStatus} onRule={onRule} onDraft={onDraft} onSaveDraft={onSaveDraft} onSend={onSend} onAnswer={onAnswer}
-          onDraftToEmClient={onDraftToEmClient} onHandoffPrepare={onHandoffPrepare} onHandoffOpen={onHandoffOpen} onPickFolder={onPickFolder} onAddToCalendar={onAddToCalendar} onAddToCalendarVia={onAddToCalendarVia} onHandoffCopy={onHandoffCopy} onCalendarCopy={onCalendarCopy}
+          onDraftToEmClient={onDraftToEmClient} onHandoffPrepare={onHandoffPrepare} onHandoffOpen={onHandoffOpen} onPickFolder={onPickFolder} onAddToCalendar={onAddToCalendar} onAddToCalendarVia={onAddToCalendarVia} onRemoveFromCalendar={onRemoveFromCalendar} onHandoffCopy={onHandoffCopy} onCalendarCopy={onCalendarCopy}
         />
       );
     }
